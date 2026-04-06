@@ -36,10 +36,12 @@ public record CreateHabitResponse(
 public class CreateHabitHandler : IRequestHandler<CreateHabitCommand, Result<CreateHabitResponse>>
 {
     private readonly AppDbContext _db;
+    private readonly IMediator _mediator;
 
-    public CreateHabitHandler(AppDbContext db)
+    public CreateHabitHandler(AppDbContext db, IMediator mediator)
     {
         _db = db;
+        _mediator = mediator;
     }
 
     public async Task<Result<CreateHabitResponse>> Handle(CreateHabitCommand request, CancellationToken cancellationToken)
@@ -80,6 +82,10 @@ public class CreateHabitHandler : IRequestHandler<CreateHabitCommand, Result<Cre
 
         _db.Habits.Add(habit);
         await _db.SaveChangesAsync(cancellationToken);
+
+        // Recalculate score for today since a new habit was added
+        var today = DateOnly.FromDateTime(DateTime.UtcNow);
+        await _mediator.Send(new Scores.RecalculateScoreCommand(today), cancellationToken);
 
         var response = new CreateHabitResponse(
             habit.Id,

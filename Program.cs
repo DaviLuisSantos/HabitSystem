@@ -49,11 +49,15 @@ builder.Logging.AddConsole();
 
 var app = builder.Build();
 
-// Create database if it doesn't exist
+// Create database if it doesn't exist (only if it doesn't already exist)
 using (var scope = app.Services.CreateScope())
 {
     var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
-    db.Database.EnsureCreated();
+    // Only create if the database doesn't exist
+    if (!db.Database.CanConnect())
+    {
+        db.Database.EnsureCreated();
+    }
 }
 
 // Configure the HTTP request pipeline.
