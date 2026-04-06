@@ -16,7 +16,8 @@ builder.Services.AddCors(options =>
     {
         policy.AllowAnyOrigin()
               .AllowAnyMethod()
-              .AllowAnyHeader();
+              .AllowAnyHeader()
+              .WithExposedHeaders("Content-Type", "X-Total-Count");
     });
 });
 
@@ -66,7 +67,7 @@ else
     app.MapOpenApi();
 }
 
-// Use CORS
+// Use CORS - DEVE estar ANTES de UseAuthorization
 app.UseCors("AllowAll");
 
 app.UseAuthorization();
