@@ -20,9 +20,16 @@ builder.Services.AddCors(options =>
     });
 });
 
-// Add DbContext with SQLite
+var connectionString = builder.Configuration.GetConnectionString("DefaultConnection");
+
+// Se estiver em produção, força caminho persistente
+if (builder.Environment.IsProduction())
+{
+    connectionString = "Data Source=/home/data/app.db";
+}
+
 builder.Services.AddDbContext<AppDbContext>(options =>
-    options.UseSqlite(builder.Configuration.GetConnectionString("DefaultConnection")));
+    options.UseSqlite(connectionString));
 
 // Add MediatR for vertical slices
 builder.Services.AddMediatR(cfg => cfg.RegisterServicesFromAssembly(typeof(Program).Assembly));
@@ -37,17 +44,15 @@ builder.Services.AddControllers();
 // Learn more about configuring OpenAPI at https://aka.ms/aspnet/openapi
 builder.Services.AddOpenApi();
 
-// Configure the server to listen on all network interfaces
-builder.WebHost.UseUrls("http://0.0.0.0:5000", "https://0.0.0.0:5001");
+builder.Logging.AddConsole();
 
 var app = builder.Build();
 
-// Apply migrations automatically in development
-if (app.Environment.IsDevelopment())
+// Create database if it doesn't exist
+using (var scope = app.Services.CreateScope())
 {
-    using var scope = app.Services.CreateScope();
     var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
-    db.Database.Migrate();
+    db.Database.EnsureCreated();
 }
 
 // Configure the HTTP request pipeline.
@@ -55,8 +60,11 @@ if (app.Environment.IsDevelopment())
 {
     app.MapOpenApi();
 }
-
-//app.UseHttpsRedirection();
+else
+{
+    // Enable OpenAPI in production as well for Swagger UI
+    app.MapOpenApi();
+}
 
 // Use CORS
 app.UseCors("AllowAll");
@@ -64,6 +72,12 @@ app.UseCors("AllowAll");
 app.UseAuthorization();
 
 app.MapControllers();
+
+// Health check endpoint for Azure monitoring
+app.MapGet("/health", () => Results.Ok(new { status = "healthy" }))
+    .WithName("Health")
+    .WithOpenApi()
+    .AllowAnonymous();
 
 // Map Habit endpoints
 app.MapCreateHabit();
