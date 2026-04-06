@@ -1,0 +1,215 @@
+### Habit System API Tests
+
+### Variables
+@baseUrl = http://localhost:5232
+@habitId = {{createHabit.response.body.id}}
+@checkInId = {{createCheckIn.response.body.id}}
+
+### Health Check
+GET {{baseUrl}}/
+
+###############################################################################
+# HABITS
+###############################################################################
+
+### Create Habit - Exercise (Daily)
+# @name createHabit
+POST {{baseUrl}}/api/habits
+Content-Type: application/json
+
+{
+  "name": "Exercise",
+  "description": "Morning workout routine",
+  "weight": 8,
+  "partialWeight": 3,
+  "frequencyType": "Daily",
+  "frequencyDays": null,
+  "frequencyTimes": null
+}
+
+### Create Habit - Reading (Daily)
+POST {{baseUrl}}/api/habits
+Content-Type: application/json
+
+{
+  "name": "Reading",
+  "description": "Read for 30 minutes",
+  "weight": 5,
+  "partialWeight": 2,
+  "frequencyType": "Daily",
+  "frequencyDays": null,
+  "frequencyTimes": null
+}
+
+### Create Habit - Meditation (Specific Days: Mon/Wed/Fri)
+POST {{baseUrl}}/api/habits
+Content-Type: application/json
+
+{
+  "name": "Meditation",
+  "description": "10 minutes meditation",
+  "weight": 6,
+  "partialWeight": 2,
+  "frequencyType": "SpecificDays",
+  "frequencyDays": [1, 3, 5],
+  "frequencyTimes": null
+}
+
+### Create Habit - Study Code (3x per week)
+POST {{baseUrl}}/api/habits
+Content-Type: application/json
+
+{
+  "name": "Study Code",
+  "description": "Learn new programming concepts",
+  "weight": 7,
+  "partialWeight": 3,
+  "frequencyType": "XTimesWeek",
+  "frequencyDays": null,
+  "frequencyTimes": 3
+}
+
+### Get All Habits (active only)
+GET {{baseUrl}}/api/habits?activeOnly=true
+
+### Get All Habits (including archived)
+GET {{baseUrl}}/api/habits?activeOnly=false
+
+### Get Habit By ID
+GET {{baseUrl}}/api/habits/{{habitId}}
+
+### Update Habit
+PUT {{baseUrl}}/api/habits/{{habitId}}
+Content-Type: application/json
+
+{
+  "name": "Exercise (Updated)",
+  "description": "Morning and evening workout",
+  "weight": 9,
+  "partialWeight": 4,
+  "frequencyType": "Daily",
+  "frequencyDays": null,
+  "frequencyTimes": null
+}
+
+### Archive Habit
+DELETE {{baseUrl}}/api/habits/{{habitId}}
+
+###############################################################################
+# CHECK-INS
+###############################################################################
+
+### Create Check-In - Done
+# @name createCheckIn
+POST {{baseUrl}}/api/checkins
+Content-Type: application/json
+
+{
+  "habitId": "{{habitId}}",
+  "date": "2026-04-06",
+  "status": "Done",
+  "note": "Great workout today!"
+}
+
+### Create Check-In - Partial
+POST {{baseUrl}}/api/checkins
+Content-Type: application/json
+
+{
+  "habitId": "{{habitId}}",
+  "date": "2026-04-05",
+  "status": "Partial",
+  "note": "Only did 15 minutes"
+}
+
+### Create Check-In - Duplicate (Should fail)
+POST {{baseUrl}}/api/checkins
+Content-Type: application/json
+
+{
+  "habitId": "{{habitId}}",
+  "date": "2026-04-06",
+  "status": "Done",
+  "note": "This should fail"
+}
+
+### Get Today's Check-Ins
+GET {{baseUrl}}/api/checkins/today
+
+### Get Check-Ins by Date Range
+GET {{baseUrl}}/api/checkins?startDate=2026-04-01&endDate=2026-04-07
+
+### Update Check-In
+PUT {{baseUrl}}/api/checkins/{{checkInId}}
+Content-Type: application/json
+
+{
+  "status": "Partial",
+  "note": "Actually only did half"
+}
+
+###############################################################################
+# SCORES
+###############################################################################
+
+### Get Today's Score
+GET {{baseUrl}}/api/scores/today
+
+### Get Score for Specific Date
+GET {{baseUrl}}/api/scores/2026-04-06
+
+### Get Weekly Scores (current week)
+GET {{baseUrl}}/api/scores/week
+
+### Get Weekly Scores (specific date)
+GET {{baseUrl}}/api/scores/week?date=2026-04-06
+
+###############################################################################
+# VALIDATION TESTS
+###############################################################################
+
+### Create Habit - Invalid Weight (Should fail)
+POST {{baseUrl}}/api/habits
+Content-Type: application/json
+
+{
+  "name": "Invalid Habit",
+  "weight": 15,
+  "partialWeight": 2,
+  "frequencyType": "Daily"
+}
+
+### Create Habit - Missing Name (Should fail)
+POST {{baseUrl}}/api/habits
+Content-Type: application/json
+
+{
+  "name": "",
+  "weight": 5,
+  "partialWeight": 2,
+  "frequencyType": "Daily"
+}
+
+### Create Habit - SpecificDays without FrequencyDays (Should fail)
+POST {{baseUrl}}/api/habits
+Content-Type: application/json
+
+{
+  "name": "Invalid Habit",
+  "weight": 5,
+  "partialWeight": 2,
+  "frequencyType": "SpecificDays",
+  "frequencyDays": null
+}
+
+### Create Habit - XTimesWeek without FrequencyTimes (Should fail)
+POST {{baseUrl}}/api/habits
+Content-Type: application/json
+
+{
+  "name": "Invalid Habit",
+  "weight": 5,
+  "partialWeight": 2,
+  "frequencyType": "XTimesWeek",
+  "frequencyTimes": null
+}
