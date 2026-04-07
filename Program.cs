@@ -86,12 +86,65 @@ builder.Logging.AddConsole();
 
 var app = builder.Build();
 
-// Create database if it doesn't exist (only if it doesn't already exist)
+// Initialize database - handle both fresh installs and existing databases
 using (var scope = app.Services.CreateScope())
 {
     var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
-    // Apply any pending migrations automatically
-    db.Database.Migrate();
+    var logger = scope.ServiceProvider.GetRequiredService<ILogger<Program>>();
+    
+    try
+    {
+        // Check if database exists
+        if (db.Database.CanConnect())
+        {
+            logger.LogInformation("Database exists, checking for pending migrations...");
+            
+            // Check if migrations table exists (if not, db was created with EnsureCreated)
+            var pendingMigrations = db.Database.GetPendingMigrations().ToList();
+            var appliedMigrations = db.Database.GetAppliedMigrations().ToList();
+            
+            if (appliedMigrations.Count == 0 && pendingMigrations.Count > 0)
+            {
+                // Database was created with EnsureCreated, we need to mark migrations as applied
+                logger.LogWarning("Database exists but has no migrations history. This may cause issues.");
+                // Try to apply migrations anyway - this might fail if schema already exists
+                try
+                {
+                    db.Database.Migrate();
+                }
+                catch (Exception migrationEx)
+                {
+                    logger.LogWarning(migrationEx, "Migration failed, database schema may already exist");
+                }
+            }
+            else if (pendingMigrations.Count > 0)
+            {
+                logger.LogInformation($"Applying {pendingMigrations.Count} pending migrations...");
+                db.Database.Migrate();
+            }
+            else
+            {
+                logger.LogInformation("Database is up to date");
+            }
+        }
+        else
+        {
+            logger.LogInformation("Database does not exist, creating with migrations...");
+            db.Database.Migrate();
+        }
+    }
+    catch (Exception ex)
+    {
+        logger.LogError(ex, "Error during database initialization. Attempting EnsureCreated as fallback...");
+        try
+        {
+            db.Database.EnsureCreated();
+        }
+        catch (Exception ensureEx)
+        {
+            logger.LogError(ensureEx, "EnsureCreated also failed");
+        }
+    }
 }
 
 // Configure the HTTP request pipeline.
