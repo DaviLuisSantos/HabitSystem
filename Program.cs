@@ -2,6 +2,7 @@ using HabitSystem.Features.Habits;
 using HabitSystem.Features.CheckIns;
 using HabitSystem.Features.Scores;
 using HabitSystem.Features.Auth;
+using HabitSystem.Features.Diagnostics;
 using HabitSystem.Infrastructure;
 using Microsoft.EntityFrameworkCore;
 using System.Text.Json.Serialization;
@@ -89,11 +90,8 @@ var app = builder.Build();
 using (var scope = app.Services.CreateScope())
 {
     var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
-    // Only create if the database doesn't exist
-    if (!db.Database.CanConnect())
-    {
-        db.Database.EnsureCreated();
-    }
+    // Apply any pending migrations automatically
+    db.Database.Migrate();
 }
 
 // Configure the HTTP request pipeline.
@@ -120,6 +118,9 @@ app.MapGet("/health", () => Results.Ok(new { status = "healthy" }))
     .WithName("Health")
     .WithOpenApi()
     .AllowAnonymous();
+
+// Map Diagnostics endpoints (REMOVER APÓS DEBUG)
+app.MapDiagnosticsEndpoint();
 
 // Map Auth endpoints
 app.MapRegisterEndpoint();
