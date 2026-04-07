@@ -73,10 +73,13 @@ public static class GetDailyScoreEndpoint
 {
     public static IEndpointRouteBuilder MapGetDailyScore(this IEndpointRouteBuilder endpoints)
     {
-        endpoints.MapGet("/api/scores/today", [Authorize] async ([FromServices] IMediator mediator) =>
+        endpoints.MapGet("/api/scores/today", [Authorize] async (
+            [FromQuery] DateOnly? date,
+            [FromServices] IMediator mediator) =>
         {
-            var today = DateOnly.FromDateTime(DateTime.UtcNow);
-            var result = await mediator.Send(new GetDailyScoreQuery(today));
+            // Use client date if provided, otherwise fallback to UTC
+            var targetDate = date ?? DateOnly.FromDateTime(DateTime.UtcNow);
+            var result = await mediator.Send(new GetDailyScoreQuery(targetDate));
             
             return result.IsSuccess 
                 ? Results.Ok(result.Value)

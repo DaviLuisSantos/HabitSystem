@@ -26,11 +26,12 @@ public class GetTodayCheckInsHandler : IRequestHandler<GetTodayCheckInsQuery, Re
         if (userId == null)
             return Result<List<CheckInDto>>.Failure("User not authenticated");
 
-        var today = DateOnly.FromDateTime(DateTime.UtcNow);
+        // Use client date if provided, otherwise fallback to UTC
+        var targetDate = request.Date ?? DateOnly.FromDateTime(DateTime.UtcNow);
 
         var checkIns = await _db.CheckIns
             .Include(c => c.Habit)
-            .Where(c => c.UserId == userId.Value && c.Date == today)
+            .Where(c => c.UserId == userId.Value && c.Date == targetDate)
             .OrderBy(c => c.Habit.Name)
             .Select(c => new CheckInDto(
                 c.Id,
@@ -48,16 +49,18 @@ public class GetTodayCheckInsHandler : IRequestHandler<GetTodayCheckInsQuery, Re
 }
 
 // Query
-public record GetTodayCheckInsQuery : IRequest<Result<List<CheckInDto>>>;
+public record GetTodayCheckInsQuery(DateOnly? Date = null) : IRequest<Result<List<CheckInDto>>>;
 
 // Endpoint
 public static class GetTodayCheckInsEndpoint
 {
     public static IEndpointRouteBuilder MapGetTodayCheckIns(this IEndpointRouteBuilder endpoints)
     {
-        endpoints.MapGet("/api/checkins/today", [Authorize] async ([FromServices] IMediator mediator) =>
+        endpoints.MapGet("/api/checkins/today", [Authorize] async (
+            [FromQuery] DateOnly? date,
+            [FromServices] IMediator mediator) =>
         {
-            var result = await mediator.Send(new GetTodayCheckInsQuery());
+            var result = await mediator.Send(new GetTodayCheckInsQuery(date));
             
             return result.IsSuccess 
                 ? Results.Ok(result.Value)
