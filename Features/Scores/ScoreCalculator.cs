@@ -29,21 +29,28 @@ public class ScoreCalculator
             .Where(h => h.UserId == userId && h.IsActive)
             .ToListAsync(cancellationToken);
 
-        // Calculate total possible score (sum of weights of expected habits)
-        short totalPossible = 0;
-        foreach (var habit in habits)
-        {
-            if (IsHabitExpectedOnDate(habit, date))
-            {
-                totalPossible += habit.Weight;
-            }
-        }
-
         // Get check-ins for this date
         var checkIns = await _db.CheckIns
             .Include(c => c.Habit)
             .Where(c => c.UserId == userId && c.Date == date)
             .ToListAsync(cancellationToken);
+
+        // Calculate total possible score (sum of weights of expected habits)
+        // For XTimesWeek habits, only add to totalPossible if there's a check-in
+        short totalPossible = 0;
+        foreach (var habit in habits)
+        {
+            if (IsHabitExpectedOnDate(habit, date))
+            {
+                // Daily and SpecificDays habits always count
+                totalPossible += habit.Weight;
+            }
+            else if (habit.FrequencyType == FrequencyType.XTimesWeek && HasCheckInOnDate(habit.Id, checkIns))
+            {
+                // XTimesWeek habits only count if user did a check-in
+                totalPossible += habit.Weight;
+            }
+        }
 
         // Calculate total earned score
         short totalEarned = 0;
@@ -100,11 +107,20 @@ public class ScoreCalculator
                 habit.FrequencyDays != null && 
                 habit.FrequencyDays.Contains((int)date.DayOfWeek == 0 ? 7 : (int)date.DayOfWeek),
             
-            // For XTimesWeek, consider all days as possible (user decides when)
-            FrequencyType.XTimesWeek => true,
+            // XTimesWeek: Not expected on any specific day (user chooses when)
+            // These habits only count in the score when a check-in is made
+            FrequencyType.XTimesWeek => false,
             
             _ => false
         };
+    }
+
+    /// <summary>
+    /// Checks if a habit has a check-in on a given date
+    /// </summary>
+    private bool HasCheckInOnDate(Guid habitId, List<CheckIn> checkIns)
+    {
+        return checkIns.Any(c => c.HabitId == habitId);
     }
 
     /// <summary>
