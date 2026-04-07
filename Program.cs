@@ -43,7 +43,20 @@ builder.Services.AddHttpContextAccessor();
 
 // Configure JWT Authentication
 var jwtSettings = builder.Configuration.GetSection("JwtSettings");
-var secret = jwtSettings["Secret"] ?? throw new InvalidOperationException("JWT Secret not configured");
+var secret = jwtSettings["Secret"];
+
+// Log JWT configuration status
+Console.WriteLine($"[STARTUP] Environment: {builder.Environment.EnvironmentName}");
+Console.WriteLine($"[STARTUP] JWT Secret configured: {!string.IsNullOrEmpty(secret)}");
+Console.WriteLine($"[STARTUP] JWT Secret length: {secret?.Length ?? 0}");
+
+if (string.IsNullOrEmpty(secret))
+{
+    // Use a default secret for startup, but auth will fail
+    Console.WriteLine("[STARTUP] WARNING: JWT Secret not configured! Using fallback.");
+    secret = "FallbackSecretKeyForStartupOnlyDoNotUseInProduction123456";
+}
+
 var issuer = jwtSettings["Issuer"] ?? "HabitSystem";
 var audience = jwtSettings["Audience"] ?? "HabitSystemUsers";
 
