@@ -30,27 +30,17 @@ public class GetWeeklyScoresHandler : IRequestHandler<GetWeeklyScoresQuery, Resu
         var startOfWeek = request.Date.AddDays(-(int)request.Date.DayOfWeek + (request.Date.DayOfWeek == DayOfWeek.Sunday ? -6 : 1));
         var endOfWeek = startOfWeek.AddDays(6);
 
-        var scores = await _db.DailyScores
-            .Where(d => d.UserId == userId.Value && 
-                        d.Date >= startOfWeek && 
-                        d.Date <= endOfWeek)
-            .OrderBy(d => d.Date)
-            .Select(d => new DailyScoreDto(
-                d.Date,
-                d.TotalPossible,
-                d.TotalEarned,
-                d.Percentage,
-                d.CalculatedAt
-            ))
-            .ToListAsync(cancellationToken);
-
-        // Calculate missing days if needed
+        // Always recalculate scores for accurate data
         var calculator = new ScoreCalculator(_db);
-        var existingDates = scores.Select(s => s.Date).ToHashSet();
+        var scores = new List<DailyScoreDto>();
+        
+        // Use client's "today" to determine which days to calculate
+        var clientToday = request.ClientToday ?? DateOnly.FromDateTime(DateTime.UtcNow);
         
         for (var date = startOfWeek; date <= endOfWeek; date = date.AddDays(1))
         {
-            if (!existingDates.Contains(date) && date <= DateOnly.FromDateTime(DateTime.UtcNow))
+            // Only calculate for days up to client's today
+            if (date <= clientToday)
             {
                 var calculatedScore = await calculator.CalculateScore(date, userId.Value, cancellationToken);
                 scores.Add(new DailyScoreDto(
@@ -68,7 +58,7 @@ public class GetWeeklyScoresHandler : IRequestHandler<GetWeeklyScoresQuery, Resu
 }
 
 // Query
-public record GetWeeklyScoresQuery(DateOnly Date) : IRequest<Result<List<DailyScoreDto>>>;
+public record GetWeeklyScoresQuery(DateOnly Date, DateOnly? ClientToday = null) : IRequest<Result<List<DailyScoreDto>>>;
 
 // Endpoint
 public static class GetWeeklyScoresEndpoint
@@ -77,10 +67,11 @@ public static class GetWeeklyScoresEndpoint
     {
         endpoints.MapGet("/api/scores/week", [Authorize] async (
             [FromQuery] DateOnly? date,
+            [FromQuery] DateOnly? today,
             [FromServices] IMediator mediator) =>
         {
             var targetDate = date ?? DateOnly.FromDateTime(DateTime.UtcNow);
-            var result = await mediator.Send(new GetWeeklyScoresQuery(targetDate));
+            var result = await mediator.Send(new GetWeeklyScoresQuery(targetDate, today));
             
             return result.IsSuccess 
                 ? Results.Ok(result.Value)
