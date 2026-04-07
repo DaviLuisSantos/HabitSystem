@@ -66,6 +66,78 @@ public static class DiagnosticsEndpoint
         .WithOpenApi()
         .AllowAnonymous();
 
+        // Endpoint para aplicar alterações de autenticação manualmente
+        app.MapPost("/api/diagnostics/fix-auth-schema", async ([FromServices] HabitSystem.Infrastructure.AppDbContext db) =>
+        {
+            var results = new List<string>();
+            
+            try
+            {
+                // Verificar se os campos de autenticação existem na tabela Users
+                var connection = db.Database.GetDbConnection();
+                await connection.OpenAsync();
+                
+                using var command = connection.CreateCommand();
+                command.CommandText = "PRAGMA table_info(Users)";
+                
+                var columns = new List<string>();
+                using (var reader = await command.ExecuteReaderAsync())
+                {
+                    while (await reader.ReadAsync())
+                    {
+                        columns.Add(reader.GetString(1)); // Column name is at index 1
+                    }
+                }
+                
+                results.Add($"Existing columns: {string.Join(", ", columns)}");
+                
+                // Adicionar colunas se não existirem
+                if (!columns.Contains("PasswordHash"))
+                {
+                    using var addCmd = connection.CreateCommand();
+                    addCmd.CommandText = "ALTER TABLE Users ADD COLUMN PasswordHash TEXT NOT NULL DEFAULT ''";
+                    await addCmd.ExecuteNonQueryAsync();
+                    results.Add("Added PasswordHash column");
+                }
+                
+                if (!columns.Contains("RefreshToken"))
+                {
+                    using var addCmd = connection.CreateCommand();
+                    addCmd.CommandText = "ALTER TABLE Users ADD COLUMN RefreshToken TEXT NULL";
+                    await addCmd.ExecuteNonQueryAsync();
+                    results.Add("Added RefreshToken column");
+                }
+                
+                if (!columns.Contains("RefreshTokenExpiryTime"))
+                {
+                    using var addCmd = connection.CreateCommand();
+                    addCmd.CommandText = "ALTER TABLE Users ADD COLUMN RefreshTokenExpiryTime TEXT NULL";
+                    await addCmd.ExecuteNonQueryAsync();
+                    results.Add("Added RefreshTokenExpiryTime column");
+                }
+                
+                return Results.Ok(new
+                {
+                    success = true,
+                    results,
+                    message = "Schema updated successfully"
+                });
+            }
+            catch (Exception ex)
+            {
+                return Results.Ok(new
+                {
+                    success = false,
+                    results,
+                    error = ex.Message,
+                    innerError = ex.InnerException?.Message
+                });
+            }
+        })
+        .WithName("DiagnosticsFixAuthSchema")
+        .WithOpenApi()
+        .AllowAnonymous();
+
         app.MapPost("/api/diagnostics/test-auth", async ([FromServices] HabitSystem.Features.Auth.AuthService authService) =>
         {
             try
