@@ -138,6 +138,58 @@ Response (400 Bad Request):
 
 ---
 
+## 🕐 Tratamento de Fuso Horário
+
+**IMPORTANTE:** O backend usa UTC internamente. Para evitar problemas de fuso horário (ex: Brasil é UTC-3), o frontend DEVE enviar a data local do cliente nos endpoints de "hoje".
+
+### Endpoints que aceitam parâmetro de data:
+
+```http
+GET /api/checkins/today?date=2026-04-06
+GET /api/scores/today?date=2026-04-06
+```
+
+### Função auxiliar para obter data local:
+```typescript
+// utils/date.ts
+export function getLocalDateString(): string {
+  const now = new Date();
+  const year = now.getFullYear();
+  const month = String(now.getMonth() + 1).padStart(2, '0');
+  const day = String(now.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
+// Uso nos serviços
+export async function getTodayCheckIns(): Promise<CheckIn[]> {
+  const localDate = getLocalDateString();
+  const response = await api.get(`/api/checkins/today?date=${localDate}`);
+  return response.data;
+}
+
+export async function getTodayScore(): Promise<DailyScore> {
+  const localDate = getLocalDateString();
+  const response = await api.get(`/api/scores/today?date=${localDate}`);
+  return response.data;
+}
+```
+
+### Ao criar check-ins, sempre envie a data local:
+```typescript
+export async function createCheckIn(habitId: string, status: CheckInStatus, note?: string): Promise<CheckIn> {
+  const localDate = getLocalDateString();
+  const response = await api.post('/api/checkins', {
+    habitId,
+    date: localDate,  // IMPORTANTE: usar data local, não UTC
+    status,
+    note
+  });
+  return response.data;
+}
+```
+
+---
+
 ## 💾 Armazenamento de Tokens
 
 ### Opção 1: localStorage (Mais simples)
