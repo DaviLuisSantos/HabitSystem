@@ -27,6 +27,21 @@ public class User
     public string Timezone { get; set; } = "America/Sao_Paulo";
 
     /// <summary>
+    /// Hashed password for authentication
+    /// </summary>
+    public string PasswordHash { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Current refresh token for this user
+    /// </summary>
+    public string? RefreshToken { get; set; }
+
+    /// <summary>
+    /// When the refresh token expires
+    /// </summary>
+    public DateTime? RefreshTokenExpiryTime { get; set; }
+
+    /// <summary>
     /// When the user account was created
     /// </summary>
     public DateTime CreatedAt { get; init; }

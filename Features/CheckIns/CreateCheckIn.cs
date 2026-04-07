@@ -3,6 +3,7 @@ using HabitSystem.Domain;
 using HabitSystem.Domain.Enums;
 using HabitSystem.Infrastructure;
 using MediatR;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 
@@ -31,18 +32,25 @@ public class CreateCheckInHandler : IRequestHandler<CreateCheckInCommand, Result
 {
     private readonly AppDbContext _db;
     private readonly IMediator _mediator;
+    private readonly IHttpContextAccessor _httpContextAccessor;
 
-    public CreateCheckInHandler(AppDbContext db, IMediator mediator)
+    public CreateCheckInHandler(AppDbContext db, IMediator mediator, IHttpContextAccessor httpContextAccessor)
     {
         _db = db;
         _mediator = mediator;
+        _httpContextAccessor = httpContextAccessor;
     }
 
     public async Task<Result<CheckInDto>> Handle(CreateCheckInCommand request, CancellationToken cancellationToken)
     {
+        // Get authenticated user ID
+        var userId = _httpContextAccessor.HttpContext?.User.GetUserId();
+        if (userId == null)
+            return Result<CheckInDto>.Failure("User not authenticated");
+
         // Validate habit exists and is active
         var habit = await _db.Habits
-            .FirstOrDefaultAsync(h => h.Id == request.Request.HabitId && h.UserId == Constants.DefaultUserId, cancellationToken);
+            .FirstOrDefaultAsync(h => h.Id == request.Request.HabitId && h.UserId == userId.Value, cancellationToken);
 
         if (habit == null)
             return Result<CheckInDto>.Failure("Habit not found");
@@ -62,7 +70,7 @@ public class CreateCheckInHandler : IRequestHandler<CreateCheckInCommand, Result
         {
             Id = Guid.NewGuid(),
             HabitId = request.Request.HabitId,
-            UserId = Constants.DefaultUserId,
+            UserId = userId.Value,
             Date = request.Request.Date,
             Status = request.Request.Status,
             Note = request.Request.Note,
@@ -97,7 +105,7 @@ public static class CreateCheckInEndpoint
 {
     public static IEndpointRouteBuilder MapCreateCheckIn(this IEndpointRouteBuilder endpoints)
     {
-        endpoints.MapPost("/api/checkins", async (
+        endpoints.MapPost("/api/checkins", [Authorize] async (
             [FromBody] CreateCheckInRequest request,
             [FromServices] IMediator mediator) =>
         {
@@ -108,7 +116,8 @@ public static class CreateCheckInEndpoint
                 : Results.BadRequest(new { error = result.Error });
         })
         .WithName("CreateCheckIn")
-        .WithOpenApi();
+        .WithOpenApi()
+        .RequireAuthorization();
 
         return endpoints;
     }

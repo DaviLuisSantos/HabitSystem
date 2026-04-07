@@ -2,6 +2,7 @@ using HabitSystem.Common;
 using HabitSystem.Domain.Enums;
 using HabitSystem.Infrastructure;
 using MediatR;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 
@@ -26,16 +27,23 @@ public record HabitDto(
 public class GetHabitsHandler : IRequestHandler<GetHabitsQuery, Result<List<HabitDto>>>
 {
     private readonly AppDbContext _db;
+    private readonly IHttpContextAccessor _httpContextAccessor;
 
-    public GetHabitsHandler(AppDbContext db)
+    public GetHabitsHandler(AppDbContext db, IHttpContextAccessor httpContextAccessor)
     {
         _db = db;
+        _httpContextAccessor = httpContextAccessor;
     }
 
     public async Task<Result<List<HabitDto>>> Handle(GetHabitsQuery request, CancellationToken cancellationToken)
     {
+        // Get authenticated user ID
+        var userId = _httpContextAccessor.HttpContext?.User.GetUserId();
+        if (userId == null)
+            return Result<List<HabitDto>>.Failure("User not authenticated");
+
         var query = _db.Habits
-            .Where(h => h.UserId == Constants.DefaultUserId);
+            .Where(h => h.UserId == userId.Value);
 
         // Filter by active status if specified
         if (request.ActiveOnly)
@@ -70,7 +78,7 @@ public static class GetHabitsEndpoint
 {
     public static IEndpointRouteBuilder MapGetHabits(this IEndpointRouteBuilder endpoints)
     {
-        endpoints.MapGet("/api/habits", async (
+        endpoints.MapGet("/api/habits", [Authorize] async (
             [FromQuery] bool activeOnly,
             [FromServices] IMediator mediator) =>
         {
@@ -81,7 +89,8 @@ public static class GetHabitsEndpoint
                 : Results.BadRequest(new { error = result.Error });
         })
         .WithName("GetHabits")
-        .WithOpenApi();
+        .WithOpenApi()
+        .RequireAuthorization();
 
         return endpoints;
     }

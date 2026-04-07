@@ -3,6 +3,7 @@ using HabitSystem.Domain;
 using HabitSystem.Domain.Enums;
 using HabitSystem.Infrastructure;
 using MediatR;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 
@@ -37,15 +38,22 @@ public class CreateHabitHandler : IRequestHandler<CreateHabitCommand, Result<Cre
 {
     private readonly AppDbContext _db;
     private readonly IMediator _mediator;
+    private readonly IHttpContextAccessor _httpContextAccessor;
 
-    public CreateHabitHandler(AppDbContext db, IMediator mediator)
+    public CreateHabitHandler(AppDbContext db, IMediator mediator, IHttpContextAccessor httpContextAccessor)
     {
         _db = db;
         _mediator = mediator;
+        _httpContextAccessor = httpContextAccessor;
     }
 
     public async Task<Result<CreateHabitResponse>> Handle(CreateHabitCommand request, CancellationToken cancellationToken)
     {
+        // Get authenticated user ID
+        var userId = _httpContextAccessor.HttpContext?.User.GetUserId();
+        if (userId == null)
+            return Result<CreateHabitResponse>.Failure("User not authenticated");
+
         // Validation
         if (string.IsNullOrWhiteSpace(request.Request.Name))
             return Result<CreateHabitResponse>.Failure("Habit name is required");
@@ -68,7 +76,7 @@ public class CreateHabitHandler : IRequestHandler<CreateHabitCommand, Result<Cre
         var habit = new Habit
         {
             Id = Guid.NewGuid(),
-            UserId = Constants.DefaultUserId,
+            UserId = userId.Value,
             Name = request.Request.Name,
             Description = request.Request.Description,
             Weight = request.Request.Weight,
@@ -112,7 +120,7 @@ public static class CreateHabitEndpoint
 {
     public static IEndpointRouteBuilder MapCreateHabit(this IEndpointRouteBuilder endpoints)
     {
-        endpoints.MapPost("/api/habits", async (
+        endpoints.MapPost("/api/habits", [Authorize] async (
             [FromBody] CreateHabitRequest request,
             [FromServices] IMediator mediator) =>
         {
@@ -123,7 +131,8 @@ public static class CreateHabitEndpoint
                 : Results.BadRequest(new { error = result.Error });
         })
         .WithName("CreateHabit")
-        .WithOpenApi();
+        .WithOpenApi()
+        .RequireAuthorization();
 
         return endpoints;
     }

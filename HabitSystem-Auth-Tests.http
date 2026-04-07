@@ -1,0 +1,82 @@
+### Sistema de Autenticação - Testes
+
+# Variáveis
+@baseUrl = http://localhost:5000
+@accessToken = 
+@refreshToken = 
+
+### 1. Health Check (público)
+GET {{baseUrl}}/health
+
+### 2. Registrar novo usuário
+POST {{baseUrl}}/api/auth/register
+Content-Type: application/json
+
+{
+  "name": "João Silva",
+  "email": "joao@example.com",
+  "password": "senha123",
+  "timezone": "America/Sao_Paulo"
+}
+
+### 3. Login com usuário existente
+POST {{baseUrl}}/api/auth/login
+Content-Type: application/json
+
+{
+  "email": "joao@example.com",
+  "password": "senha123"
+}
+
+### 4. Obter usuário atual (requer autenticação)
+GET {{baseUrl}}/api/auth/me
+Authorization: Bearer {{accessToken}}
+
+### 5. Refresh Token
+POST {{baseUrl}}/api/auth/refresh
+Content-Type: application/json
+
+{
+  "accessToken": "{{accessToken}}",
+  "refreshToken": "{{refreshToken}}"
+}
+
+### 6. Criar hábito (requer autenticação)
+POST {{baseUrl}}/api/habits
+Authorization: Bearer {{accessToken}}
+Content-Type: application/json
+
+{
+  "name": "Exercício Matinal",
+  "description": "30 minutos de exercício",
+  "weight": 5,
+  "partialWeight": 3,
+  "frequencyType": "Daily"
+}
+
+### 7. Listar hábitos (requer autenticação)
+GET {{baseUrl}}/api/habits?activeOnly=true
+Authorization: Bearer {{accessToken}}
+
+### 8. Criar check-in (requer autenticação)
+POST {{baseUrl}}/api/checkins
+Authorization: Bearer {{accessToken}}
+Content-Type: application/json
+
+{
+  "habitId": "HABIT_ID_AQUI",
+  "date": "2026-04-07",
+  "status": "Done",
+  "note": "Completado!"
+}
+
+### 9. Ver check-ins de hoje (requer autenticação)
+GET {{baseUrl}}/api/checkins/today
+Authorization: Bearer {{accessToken}}
+
+### 10. Ver score de hoje (requer autenticação)
+GET {{baseUrl}}/api/scores/today
+Authorization: Bearer {{accessToken}}
+
+### 11. Tentar acessar endpoint protegido sem token (deve falhar)
+GET {{baseUrl}}/api/habits

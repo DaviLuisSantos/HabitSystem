@@ -1,9 +1,13 @@
 using HabitSystem.Features.Habits;
 using HabitSystem.Features.CheckIns;
 using HabitSystem.Features.Scores;
+using HabitSystem.Features.Auth;
 using HabitSystem.Infrastructure;
 using Microsoft.EntityFrameworkCore;
 using System.Text.Json.Serialization;
+using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.IdentityModel.Tokens;
+using System.Text;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -23,7 +27,7 @@ builder.Services.AddCors(options =>
 
 var connectionString = builder.Configuration.GetConnectionString("DefaultConnection");
 
-// Se estiver em produção, força caminho persistente
+// Se estiver em produï¿½ï¿½o, forï¿½a caminho persistente
 if (builder.Environment.IsProduction())
 {
     connectionString = "Data Source=/home/data/app.db";
@@ -31,6 +35,38 @@ if (builder.Environment.IsProduction())
 
 builder.Services.AddDbContext<AppDbContext>(options =>
     options.UseSqlite(connectionString));
+
+// Add Authentication services
+builder.Services.AddScoped<AuthService>();
+builder.Services.AddHttpContextAccessor();
+
+// Configure JWT Authentication
+var jwtSettings = builder.Configuration.GetSection("JwtSettings");
+var secret = jwtSettings["Secret"] ?? throw new InvalidOperationException("JWT Secret not configured");
+var issuer = jwtSettings["Issuer"] ?? "HabitSystem";
+var audience = jwtSettings["Audience"] ?? "HabitSystemUsers";
+
+builder.Services.AddAuthentication(options =>
+{
+    options.DefaultAuthenticateScheme = JwtBearerDefaults.AuthenticationScheme;
+    options.DefaultChallengeScheme = JwtBearerDefaults.AuthenticationScheme;
+})
+.AddJwtBearer(options =>
+{
+    options.TokenValidationParameters = new TokenValidationParameters
+    {
+        ValidateIssuer = true,
+        ValidateAudience = true,
+        ValidateLifetime = true,
+        ValidateIssuerSigningKey = true,
+        ValidIssuer = issuer,
+        ValidAudience = audience,
+        IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(secret)),
+        ClockSkew = TimeSpan.Zero
+    };
+});
+
+builder.Services.AddAuthorization();
 
 // Add MediatR for vertical slices
 builder.Services.AddMediatR(cfg => cfg.RegisterServicesFromAssembly(typeof(Program).Assembly));
@@ -74,6 +110,7 @@ else
 // Use CORS - DEVE estar ANTES de UseAuthorization
 app.UseCors("AllowAll");
 
+app.UseAuthentication();
 app.UseAuthorization();
 
 app.MapControllers();
@@ -83,6 +120,12 @@ app.MapGet("/health", () => Results.Ok(new { status = "healthy" }))
     .WithName("Health")
     .WithOpenApi()
     .AllowAnonymous();
+
+// Map Auth endpoints
+app.MapRegisterEndpoint();
+app.MapLoginEndpoint();
+app.MapRefreshTokenEndpoint();
+app.MapGetCurrentUserEndpoint();
 
 // Map Habit endpoints
 app.MapCreateHabit();
