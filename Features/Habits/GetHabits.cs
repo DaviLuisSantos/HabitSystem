@@ -79,10 +79,10 @@ public static class GetHabitsEndpoint
     public static IEndpointRouteBuilder MapGetHabits(this IEndpointRouteBuilder endpoints)
     {
         endpoints.MapGet("/api/habits", [Authorize] async (
-            [FromQuery] bool activeOnly,
+            [FromQuery] bool? activeOnly,
             [FromServices] IMediator mediator) =>
         {
-            var result = await mediator.Send(new GetHabitsQuery(activeOnly));
+            var result = await mediator.Send(new GetHabitsQuery(activeOnly ?? true));
             
             return result.IsSuccess 
                 ? Results.Ok(result.Value)
