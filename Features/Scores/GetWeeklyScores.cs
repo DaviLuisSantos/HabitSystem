@@ -1,6 +1,7 @@
 using HabitSystem.Common;
 using HabitSystem.Infrastructure;
 using MediatR;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 
@@ -10,20 +11,27 @@ namespace HabitSystem.Features.Scores;
 public class GetWeeklyScoresHandler : IRequestHandler<GetWeeklyScoresQuery, Result<List<DailyScoreDto>>>
 {
     private readonly AppDbContext _db;
+    private readonly IHttpContextAccessor _httpContextAccessor;
 
-    public GetWeeklyScoresHandler(AppDbContext db)
+    public GetWeeklyScoresHandler(AppDbContext db, IHttpContextAccessor httpContextAccessor)
     {
         _db = db;
+        _httpContextAccessor = httpContextAccessor;
     }
 
     public async Task<Result<List<DailyScoreDto>>> Handle(GetWeeklyScoresQuery request, CancellationToken cancellationToken)
     {
+        // Get authenticated user ID
+        var userId = _httpContextAccessor.HttpContext?.User.GetUserId();
+        if (userId == null)
+            return Result<List<DailyScoreDto>>.Failure("User not authenticated");
+
         // Get Monday of the week containing the given date
         var startOfWeek = request.Date.AddDays(-(int)request.Date.DayOfWeek + (request.Date.DayOfWeek == DayOfWeek.Sunday ? -6 : 1));
         var endOfWeek = startOfWeek.AddDays(6);
 
         var scores = await _db.DailyScores
-            .Where(d => d.UserId == Constants.DefaultUserId && 
+            .Where(d => d.UserId == userId.Value && 
                         d.Date >= startOfWeek && 
                         d.Date <= endOfWeek)
             .OrderBy(d => d.Date)
@@ -44,7 +52,7 @@ public class GetWeeklyScoresHandler : IRequestHandler<GetWeeklyScoresQuery, Resu
         {
             if (!existingDates.Contains(date) && date <= DateOnly.FromDateTime(DateTime.UtcNow))
             {
-                var calculatedScore = await calculator.CalculateScore(date, cancellationToken);
+                var calculatedScore = await calculator.CalculateScore(date, userId.Value, cancellationToken);
                 scores.Add(new DailyScoreDto(
                     calculatedScore.Date,
                     calculatedScore.TotalPossible,
@@ -67,7 +75,7 @@ public static class GetWeeklyScoresEndpoint
 {
     public static IEndpointRouteBuilder MapGetWeeklyScores(this IEndpointRouteBuilder endpoints)
     {
-        endpoints.MapGet("/api/scores/week", async (
+        endpoints.MapGet("/api/scores/week", [Authorize] async (
             [FromQuery] DateOnly? date,
             [FromServices] IMediator mediator) =>
         {
@@ -79,7 +87,8 @@ public static class GetWeeklyScoresEndpoint
                 : Results.BadRequest(new { error = result.Error });
         })
         .WithName("GetWeeklyScores")
-        .WithOpenApi();
+        .WithOpenApi()
+        .RequireAuthorization();
 
         return endpoints;
     }

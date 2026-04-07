@@ -50,7 +50,7 @@ public class GetDailyScoreHandler : IRequestHandler<GetDailyScoreQuery, Result<D
         if (score == null)
         {
             var calculator = new ScoreCalculator(_db);
-            var calculatedScore = await calculator.CalculateScore(request.Date, cancellationToken);
+            var calculatedScore = await calculator.CalculateScore(request.Date, userId.Value, cancellationToken);
             
             score = new DailyScoreDto(
                 calculatedScore.Date,

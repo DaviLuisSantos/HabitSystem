@@ -1,6 +1,7 @@
 using HabitSystem.Common;
 using HabitSystem.Infrastructure;
 using MediatR;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 
@@ -10,16 +11,23 @@ namespace HabitSystem.Features.Habits;
 public class ArchiveHabitHandler : IRequestHandler<ArchiveHabitCommand, Result>
 {
     private readonly AppDbContext _db;
+    private readonly IHttpContextAccessor _httpContextAccessor;
 
-    public ArchiveHabitHandler(AppDbContext db)
+    public ArchiveHabitHandler(AppDbContext db, IHttpContextAccessor httpContextAccessor)
     {
         _db = db;
+        _httpContextAccessor = httpContextAccessor;
     }
 
     public async Task<Result> Handle(ArchiveHabitCommand request, CancellationToken cancellationToken)
     {
+        // Get authenticated user ID
+        var userId = _httpContextAccessor.HttpContext?.User.GetUserId();
+        if (userId == null)
+            return Result.Failure("User not authenticated");
+
         var habit = await _db.Habits
-            .FirstOrDefaultAsync(h => h.Id == request.Id && h.UserId == Constants.DefaultUserId, cancellationToken);
+            .FirstOrDefaultAsync(h => h.Id == request.Id && h.UserId == userId.Value, cancellationToken);
 
         if (habit == null)
             return Result.Failure("Habit not found");
@@ -42,7 +50,7 @@ public static class ArchiveHabitEndpoint
 {
     public static IEndpointRouteBuilder MapArchiveHabit(this IEndpointRouteBuilder endpoints)
     {
-        endpoints.MapDelete("/api/habits/{id:guid}", async (
+        endpoints.MapDelete("/api/habits/{id:guid}", [Authorize] async (
             [FromRoute] Guid id,
             [FromServices] IMediator mediator) =>
         {
@@ -53,7 +61,8 @@ public static class ArchiveHabitEndpoint
                 : Results.NotFound(new { error = result.Error });
         })
         .WithName("ArchiveHabit")
-        .WithOpenApi();
+        .WithOpenApi()
+        .RequireAuthorization();
 
         return endpoints;
     }

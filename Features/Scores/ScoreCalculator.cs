@@ -20,13 +20,13 @@ public class ScoreCalculator
     }
 
     /// <summary>
-    /// Calculates the daily score for a given date
+    /// Calculates the daily score for a given date and user
     /// </summary>
-    public async Task<DailyScore> CalculateScore(DateOnly date, CancellationToken cancellationToken = default)
+    public async Task<DailyScore> CalculateScore(DateOnly date, Guid userId, CancellationToken cancellationToken = default)
     {
         // Get all active habits for the user
         var habits = await _db.Habits
-            .Where(h => h.UserId == Constants.DefaultUserId && h.IsActive)
+            .Where(h => h.UserId == userId && h.IsActive)
             .ToListAsync(cancellationToken);
 
         // Calculate total possible score (sum of weights of expected habits)
@@ -42,7 +42,7 @@ public class ScoreCalculator
         // Get check-ins for this date
         var checkIns = await _db.CheckIns
             .Include(c => c.Habit)
-            .Where(c => c.UserId == Constants.DefaultUserId && c.Date == date)
+            .Where(c => c.UserId == userId && c.Date == date)
             .ToListAsync(cancellationToken);
 
         // Calculate total earned score
@@ -57,14 +57,14 @@ public class ScoreCalculator
 
         // Find or create daily score
         var dailyScore = await _db.DailyScores
-            .FirstOrDefaultAsync(d => d.UserId == Constants.DefaultUserId && d.Date == date, cancellationToken);
+            .FirstOrDefaultAsync(d => d.UserId == userId && d.Date == date, cancellationToken);
 
         if (dailyScore == null)
         {
             dailyScore = new DailyScore
             {
                 Id = Guid.NewGuid(),
-                UserId = Constants.DefaultUserId,
+                UserId = userId,
                 Date = date,
                 TotalPossible = totalPossible,
                 TotalEarned = totalEarned,
@@ -135,9 +135,9 @@ public class RecalculateScoreHandler : IRequestHandler<RecalculateScoreCommand, 
     public async Task<Result> Handle(RecalculateScoreCommand request, CancellationToken cancellationToken)
     {
         var calculator = new ScoreCalculator(_db);
-        await calculator.CalculateScore(request.Date, cancellationToken);
+        await calculator.CalculateScore(request.Date, request.UserId, cancellationToken);
         return Result.Success();
     }
 }
 
-public record RecalculateScoreCommand(DateOnly Date) : IRequest<Result>;
+public record RecalculateScoreCommand(DateOnly Date, Guid UserId) : IRequest<Result>;

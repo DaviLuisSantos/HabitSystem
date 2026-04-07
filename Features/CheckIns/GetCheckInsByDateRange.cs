@@ -1,6 +1,7 @@
 using HabitSystem.Common;
 using HabitSystem.Infrastructure;
 using MediatR;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 
@@ -10,17 +11,24 @@ namespace HabitSystem.Features.CheckIns;
 public class GetCheckInsByDateRangeHandler : IRequestHandler<GetCheckInsByDateRangeQuery, Result<List<CheckInDto>>>
 {
     private readonly AppDbContext _db;
+    private readonly IHttpContextAccessor _httpContextAccessor;
 
-    public GetCheckInsByDateRangeHandler(AppDbContext db)
+    public GetCheckInsByDateRangeHandler(AppDbContext db, IHttpContextAccessor httpContextAccessor)
     {
         _db = db;
+        _httpContextAccessor = httpContextAccessor;
     }
 
     public async Task<Result<List<CheckInDto>>> Handle(GetCheckInsByDateRangeQuery request, CancellationToken cancellationToken)
     {
+        // Get authenticated user ID
+        var userId = _httpContextAccessor.HttpContext?.User.GetUserId();
+        if (userId == null)
+            return Result<List<CheckInDto>>.Failure("User not authenticated");
+
         var checkIns = await _db.CheckIns
             .Include(c => c.Habit)
-            .Where(c => c.UserId == Constants.DefaultUserId && 
+            .Where(c => c.UserId == userId.Value && 
                         c.Date >= request.StartDate && 
                         c.Date <= request.EndDate)
             .OrderBy(c => c.Date)
@@ -48,7 +56,7 @@ public static class GetCheckInsByDateRangeEndpoint
 {
     public static IEndpointRouteBuilder MapGetCheckInsByDateRange(this IEndpointRouteBuilder endpoints)
     {
-        endpoints.MapGet("/api/checkins", async (
+        endpoints.MapGet("/api/checkins", [Authorize] async (
             [FromQuery] DateOnly startDate,
             [FromQuery] DateOnly endDate,
             [FromServices] IMediator mediator) =>
@@ -60,7 +68,8 @@ public static class GetCheckInsByDateRangeEndpoint
                 : Results.BadRequest(new { error = result.Error });
         })
         .WithName("GetCheckInsByDateRange")
-        .WithOpenApi();
+        .WithOpenApi()
+        .RequireAuthorization();
 
         return endpoints;
     }

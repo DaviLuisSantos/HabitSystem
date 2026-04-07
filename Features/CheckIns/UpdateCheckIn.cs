@@ -2,6 +2,7 @@ using HabitSystem.Common;
 using HabitSystem.Domain.Enums;
 using HabitSystem.Infrastructure;
 using MediatR;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 
@@ -18,18 +19,25 @@ public class UpdateCheckInHandler : IRequestHandler<UpdateCheckInCommand, Result
 {
     private readonly AppDbContext _db;
     private readonly IMediator _mediator;
+    private readonly IHttpContextAccessor _httpContextAccessor;
 
-    public UpdateCheckInHandler(AppDbContext db, IMediator mediator)
+    public UpdateCheckInHandler(AppDbContext db, IMediator mediator, IHttpContextAccessor httpContextAccessor)
     {
         _db = db;
         _mediator = mediator;
+        _httpContextAccessor = httpContextAccessor;
     }
 
     public async Task<Result<CheckInDto>> Handle(UpdateCheckInCommand request, CancellationToken cancellationToken)
     {
+        // Get authenticated user ID
+        var userId = _httpContextAccessor.HttpContext?.User.GetUserId();
+        if (userId == null)
+            return Result<CheckInDto>.Failure("User not authenticated");
+
         var checkIn = await _db.CheckIns
             .Include(c => c.Habit)
-            .FirstOrDefaultAsync(c => c.Id == request.Id && c.UserId == Constants.DefaultUserId, cancellationToken);
+            .FirstOrDefaultAsync(c => c.Id == request.Id && c.UserId == userId.Value, cancellationToken);
 
         if (checkIn == null)
             return Result<CheckInDto>.Failure("Check-in not found");
@@ -41,7 +49,7 @@ public class UpdateCheckInHandler : IRequestHandler<UpdateCheckInCommand, Result
         await _db.SaveChangesAsync(cancellationToken);
 
         // Trigger score recalculation for this date
-        await _mediator.Send(new Scores.RecalculateScoreCommand(checkIn.Date), cancellationToken);
+        await _mediator.Send(new Scores.RecalculateScoreCommand(checkIn.Date, userId.Value), cancellationToken);
 
         var response = new CheckInDto(
             checkIn.Id,
@@ -65,7 +73,7 @@ public static class UpdateCheckInEndpoint
 {
     public static IEndpointRouteBuilder MapUpdateCheckIn(this IEndpointRouteBuilder endpoints)
     {
-        endpoints.MapPut("/api/checkins/{id:guid}", async (
+        endpoints.MapPut("/api/checkins/{id:guid}", [Authorize] async (
             [FromRoute] Guid id,
             [FromBody] UpdateCheckInRequest request,
             [FromServices] IMediator mediator) =>
@@ -77,7 +85,8 @@ public static class UpdateCheckInEndpoint
                 : Results.BadRequest(new { error = result.Error });
         })
         .WithName("UpdateCheckIn")
-        .WithOpenApi();
+        .WithOpenApi()
+        .RequireAuthorization();
 
         return endpoints;
     }

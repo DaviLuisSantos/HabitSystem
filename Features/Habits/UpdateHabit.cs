@@ -2,6 +2,7 @@ using HabitSystem.Common;
 using HabitSystem.Domain.Enums;
 using HabitSystem.Infrastructure;
 using MediatR;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 
@@ -22,14 +23,21 @@ public record UpdateHabitRequest(
 public class UpdateHabitHandler : IRequestHandler<UpdateHabitCommand, Result<HabitDto>>
 {
     private readonly AppDbContext _db;
+    private readonly IHttpContextAccessor _httpContextAccessor;
 
-    public UpdateHabitHandler(AppDbContext db)
+    public UpdateHabitHandler(AppDbContext db, IHttpContextAccessor httpContextAccessor)
     {
         _db = db;
+        _httpContextAccessor = httpContextAccessor;
     }
 
     public async Task<Result<HabitDto>> Handle(UpdateHabitCommand request, CancellationToken cancellationToken)
     {
+        // Get authenticated user ID
+        var userId = _httpContextAccessor.HttpContext?.User.GetUserId();
+        if (userId == null)
+            return Result<HabitDto>.Failure("User not authenticated");
+
         // Validation
         if (string.IsNullOrWhiteSpace(request.Request.Name))
             return Result<HabitDto>.Failure("Habit name is required");
@@ -50,7 +58,7 @@ public class UpdateHabitHandler : IRequestHandler<UpdateHabitCommand, Result<Hab
 
         // Find habit
         var habit = await _db.Habits
-            .FirstOrDefaultAsync(h => h.Id == request.Id && h.UserId == Constants.DefaultUserId, cancellationToken);
+            .FirstOrDefaultAsync(h => h.Id == request.Id && h.UserId == userId.Value, cancellationToken);
 
         if (habit == null)
             return Result<HabitDto>.Failure("Habit not found");
@@ -92,7 +100,7 @@ public static class UpdateHabitEndpoint
 {
     public static IEndpointRouteBuilder MapUpdateHabit(this IEndpointRouteBuilder endpoints)
     {
-        endpoints.MapPut("/api/habits/{id:guid}", async (
+        endpoints.MapPut("/api/habits/{id:guid}", [Authorize] async (
             [FromRoute] Guid id,
             [FromBody] UpdateHabitRequest request,
             [FromServices] IMediator mediator) =>
@@ -104,7 +112,8 @@ public static class UpdateHabitEndpoint
                 : Results.BadRequest(new { error = result.Error });
         })
         .WithName("UpdateHabit")
-        .WithOpenApi();
+        .WithOpenApi()
+        .RequireAuthorization();
 
         return endpoints;
     }

@@ -81,7 +81,7 @@ public class CreateCheckInHandler : IRequestHandler<CreateCheckInCommand, Result
         await _db.SaveChangesAsync(cancellationToken);
 
         // Trigger score recalculation for this date
-        await _mediator.Send(new Scores.RecalculateScoreCommand(request.Request.Date), cancellationToken);
+        await _mediator.Send(new Scores.RecalculateScoreCommand(request.Request.Date, userId.Value), cancellationToken);
 
         var response = new CheckInDto(
             checkIn.Id,

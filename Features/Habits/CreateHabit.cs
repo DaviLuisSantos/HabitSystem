@@ -93,7 +93,7 @@ public class CreateHabitHandler : IRequestHandler<CreateHabitCommand, Result<Cre
 
         // Recalculate score for today since a new habit was added
         var today = DateOnly.FromDateTime(DateTime.UtcNow);
-        await _mediator.Send(new Scores.RecalculateScoreCommand(today), cancellationToken);
+        await _mediator.Send(new Scores.RecalculateScoreCommand(today, userId.Value), cancellationToken);
 
         var response = new CreateHabitResponse(
             habit.Id,

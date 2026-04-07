@@ -1,6 +1,7 @@
 using HabitSystem.Common;
 using HabitSystem.Infrastructure;
 using MediatR;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 
@@ -10,16 +11,23 @@ namespace HabitSystem.Features.Habits;
 public class GetHabitByIdHandler : IRequestHandler<GetHabitByIdQuery, Result<HabitDto>>
 {
     private readonly AppDbContext _db;
+    private readonly IHttpContextAccessor _httpContextAccessor;
 
-    public GetHabitByIdHandler(AppDbContext db)
+    public GetHabitByIdHandler(AppDbContext db, IHttpContextAccessor httpContextAccessor)
     {
         _db = db;
+        _httpContextAccessor = httpContextAccessor;
     }
 
     public async Task<Result<HabitDto>> Handle(GetHabitByIdQuery request, CancellationToken cancellationToken)
     {
+        // Get authenticated user ID
+        var userId = _httpContextAccessor.HttpContext?.User.GetUserId();
+        if (userId == null)
+            return Result<HabitDto>.Failure("User not authenticated");
+
         var habit = await _db.Habits
-            .Where(h => h.Id == request.Id && h.UserId == Constants.DefaultUserId)
+            .Where(h => h.Id == request.Id && h.UserId == userId.Value)
             .Select(h => new HabitDto(
                 h.Id,
                 h.Name,
@@ -50,7 +58,7 @@ public static class GetHabitByIdEndpoint
 {
     public static IEndpointRouteBuilder MapGetHabitById(this IEndpointRouteBuilder endpoints)
     {
-        endpoints.MapGet("/api/habits/{id:guid}", async (
+        endpoints.MapGet("/api/habits/{id:guid}", [Authorize] async (
             [FromRoute] Guid id,
             [FromServices] IMediator mediator) =>
         {
@@ -61,7 +69,8 @@ public static class GetHabitByIdEndpoint
                 : Results.NotFound(new { error = result.Error });
         })
         .WithName("GetHabitById")
-        .WithOpenApi();
+        .WithOpenApi()
+        .RequireAuthorization();
 
         return endpoints;
     }
