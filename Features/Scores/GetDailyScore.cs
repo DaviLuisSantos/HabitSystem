@@ -35,31 +35,18 @@ public class GetDailyScoreHandler : IRequestHandler<GetDailyScoreQuery, Result<D
         if (userId == null)
             return Result<DailyScoreDto>.Failure("User not authenticated");
 
-        var score = await _db.DailyScores
-            .Where(d => d.UserId == userId.Value && d.Date == request.Date)
-            .Select(d => new DailyScoreDto(
-                d.Date,
-                d.TotalPossible,
-                d.TotalEarned,
-                d.Percentage,
-                d.CalculatedAt
-            ))
-            .FirstOrDefaultAsync(cancellationToken);
-
-        // If no score exists, calculate it
-        if (score == null)
-        {
-            var calculator = new ScoreCalculator(_db);
-            var calculatedScore = await calculator.CalculateScore(request.Date, userId.Value, cancellationToken);
-            
-            score = new DailyScoreDto(
-                calculatedScore.Date,
-                calculatedScore.TotalPossible,
-                calculatedScore.TotalEarned,
-                calculatedScore.Percentage,
-                calculatedScore.CalculatedAt
-            );
-        }
+        // Always recalculate to ensure we have the latest data
+        // (new habits, updated check-ins, etc.)
+        var calculator = new ScoreCalculator(_db);
+        var calculatedScore = await calculator.CalculateScore(request.Date, userId.Value, cancellationToken);
+        
+        var score = new DailyScoreDto(
+            calculatedScore.Date,
+            calculatedScore.TotalPossible,
+            calculatedScore.TotalEarned,
+            calculatedScore.Percentage,
+            calculatedScore.CalculatedAt
+        );
 
         return Result<DailyScoreDto>.Success(score);
     }
