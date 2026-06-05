@@ -68,9 +68,21 @@ public class CreateHabitHandler : IRequestHandler<CreateHabitCommand, Result<Cre
             (request.Request.FrequencyDays == null || request.Request.FrequencyDays.Length == 0))
             return Result<CreateHabitResponse>.Failure("FrequencyDays is required for SpecificDays frequency type");
 
-        if (request.Request.FrequencyType == FrequencyType.XTimesWeek && 
+        if (request.Request.FrequencyType == FrequencyType.XTimesWeek &&
             (request.Request.FrequencyTimes == null || request.Request.FrequencyTimes < 1))
             return Result<CreateHabitResponse>.Failure("FrequencyTimes is required for XTimesWeek frequency type");
+
+        // Enforce free plan habit limit
+        var user = await _db.Users.FindAsync(new object[] { userId.Value }, cancellationToken);
+        if (user?.Plan == Domain.Enums.Plan.Free)
+        {
+            var activeCount = await _db.Habits
+                .CountAsync(h => h.UserId == userId.Value && h.IsActive, cancellationToken);
+
+            if (activeCount >= Common.Constants.FreePlanHabitLimit)
+                return Result<CreateHabitResponse>.Failure(
+                    $"Free plan is limited to {Common.Constants.FreePlanHabitLimit} active habits. Upgrade to Pro for unlimited habits.");
+        }
 
         // Create habit
         var habit = new Habit

@@ -1,3 +1,5 @@
+using HabitSystem.Domain.Enums;
+
 namespace HabitSystem.Domain;
 
 /// <summary>
@@ -40,6 +42,36 @@ public class User
     /// When the refresh token expires
     /// </summary>
     public DateTime? RefreshTokenExpiryTime { get; set; }
+
+    /// <summary>
+    /// Subscription plan (Free or Pro)
+    /// </summary>
+    public Plan Plan { get; set; } = Plan.Free;
+
+    /// <summary>
+    /// Whether the user's email has been verified
+    /// </summary>
+    public bool IsEmailVerified { get; set; } = false;
+
+    /// <summary>
+    /// Token sent to user's email for verification
+    /// </summary>
+    public string? EmailVerificationToken { get; set; }
+
+    /// <summary>
+    /// When the email verification token expires
+    /// </summary>
+    public DateTime? EmailVerificationTokenExpiry { get; set; }
+
+    /// <summary>
+    /// Token sent to user's email for password reset
+    /// </summary>
+    public string? PasswordResetToken { get; set; }
+
+    /// <summary>
+    /// When the password reset token expires
+    /// </summary>
+    public DateTime? PasswordResetTokenExpiry { get; set; }
 
     /// <summary>
     /// When the user account was created

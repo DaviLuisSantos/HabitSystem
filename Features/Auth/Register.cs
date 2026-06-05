@@ -88,6 +88,7 @@ public static class Register
         })
         .WithName("Register")
         .WithOpenApi()
-        .AllowAnonymous();
+        .AllowAnonymous()
+        .RequireRateLimiting("auth");
     }
 }

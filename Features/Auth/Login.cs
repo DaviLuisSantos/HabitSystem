@@ -75,6 +75,7 @@ public static class Login
         })
         .WithName("Login")
         .WithOpenApi()
-        .AllowAnonymous();
+        .AllowAnonymous()
+        .RequireRateLimiting("auth");
     }
 }

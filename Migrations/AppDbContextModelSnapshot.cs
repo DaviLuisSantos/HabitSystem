@@ -172,6 +172,18 @@ namespace HabitSystem.Migrations
                         .HasMaxLength(255)
                         .HasColumnType("TEXT");
 
+                    b.Property<string>("EmailVerificationToken")
+                        .HasMaxLength(256)
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime?>("EmailVerificationTokenExpiry")
+                        .HasColumnType("TEXT");
+
+                    b.Property<bool>("IsEmailVerified")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("INTEGER")
+                        .HasDefaultValue(false);
+
                     b.Property<string>("Name")
                         .IsRequired()
                         .HasMaxLength(100)
@@ -180,6 +192,19 @@ namespace HabitSystem.Migrations
                     b.Property<string>("PasswordHash")
                         .IsRequired()
                         .HasColumnType("TEXT");
+
+                    b.Property<string>("PasswordResetToken")
+                        .HasMaxLength(256)
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime?>("PasswordResetTokenExpiry")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Plan")
+                        .IsRequired()
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("TEXT")
+                        .HasDefaultValue("Free");
 
                     b.Property<string>("RefreshToken")
                         .HasColumnType("TEXT");
@@ -200,17 +225,6 @@ namespace HabitSystem.Migrations
                         .IsUnique();
 
                     b.ToTable("Users");
-
-                    b.HasData(
-                        new
-                        {
-                            Id = new Guid("00000000-0000-0000-0000-000000000001"),
-                            CreatedAt = new DateTime(2026, 1, 1, 0, 0, 0, 0, DateTimeKind.Utc),
-                            Email = "dev@habitsystem.local",
-                            Name = "Dev User",
-                            PasswordHash = "",
-                            Timezone = "America/Sao_Paulo"
-                        });
                 });
 
             modelBuilder.Entity("HabitSystem.Domain.CheckIn", b =>
