@@ -6,8 +6,17 @@ namespace HabitSystem.Common;
 public static class Constants
 {
     /// <summary>
-    /// Default user ID for single-user MVP
-    /// This will be replaced with proper authentication in Phase 2
+    /// Maximum number of active habits for free plan users
     /// </summary>
-    public static readonly Guid DefaultUserId = new("00000000-0000-0000-0000-000000000001");
+    public const int FreePlanHabitLimit = 5;
+
+    /// <summary>
+    /// Password reset token validity in hours
+    /// </summary>
+    public const int PasswordResetTokenExpiryHours = 2;
+
+    /// <summary>
+    /// Email verification token validity in hours
+    /// </summary>
+    public const int EmailVerificationTokenExpiryHours = 24;
 }

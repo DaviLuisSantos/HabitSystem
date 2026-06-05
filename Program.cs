@@ -2,13 +2,17 @@ using HabitSystem.Features.Habits;
 using HabitSystem.Features.CheckIns;
 using HabitSystem.Features.Scores;
 using HabitSystem.Features.Auth;
+using HabitSystem.Features.Account;
 using HabitSystem.Features.Diagnostics;
 using HabitSystem.Infrastructure;
+using HabitSystem.Services;
 using Microsoft.EntityFrameworkCore;
 using System.Text.Json.Serialization;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.IdentityModel.Tokens;
 using System.Text;
+using System.Threading.RateLimiting;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -28,7 +32,7 @@ builder.Services.AddCors(options =>
 
 var connectionString = builder.Configuration.GetConnectionString("DefaultConnection");
 
-// Se estiver em produ��o, for�a caminho persistente
+// Se estiver em produção, força caminho persistente
 if (builder.Environment.IsProduction())
 {
     connectionString = "Data Source=/home/data/app.db";
@@ -40,6 +44,9 @@ builder.Services.AddDbContext<AppDbContext>(options =>
 // Add Authentication services
 builder.Services.AddScoped<AuthService>();
 builder.Services.AddHttpContextAccessor();
+
+// Add Email service (pluggable: swap ConsoleEmailService for a real provider in production)
+builder.Services.AddScoped<IEmailService, ConsoleEmailService>();
 
 // Configure JWT Authentication
 var jwtSettings = builder.Configuration.GetSection("JwtSettings");
@@ -91,6 +98,33 @@ builder.Services.ConfigureHttpJsonOptions(options =>
     options.SerializerOptions.Converters.Add(new JsonStringEnumConverter());
 });
 
+// Rate limiting — protects against brute force / abuse
+builder.Services.AddRateLimiter(options =>
+{
+    options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
+
+    // Global: 120 requests per minute per IP (applies to all endpoints)
+    options.GlobalLimiter = PartitionedRateLimiter.Create<HttpContext, string>(context =>
+        RateLimitPartition.GetFixedWindowLimiter(
+            partitionKey: context.Connection.RemoteIpAddress?.ToString() ?? "unknown",
+            factory: _ => new FixedWindowRateLimiterOptions
+            {
+                PermitLimit = 120,
+                Window = TimeSpan.FromMinutes(1),
+                QueueProcessingOrder = QueueProcessingOrder.OldestFirst,
+                QueueLimit = 0,
+            }));
+
+    // Auth policy: stricter limit for login/register/forgot-password (10 req/min per IP)
+    options.AddFixedWindowLimiter("auth", opt =>
+    {
+        opt.Window = TimeSpan.FromMinutes(1);
+        opt.PermitLimit = 10;
+        opt.QueueProcessingOrder = QueueProcessingOrder.OldestFirst;
+        opt.QueueLimit = 0;
+    });
+});
+
 builder.Services.AddControllers();
 // Learn more about configuring OpenAPI at https://aka.ms/aspnet/openapi
 builder.Services.AddOpenApi();
@@ -104,18 +138,18 @@ using (var scope = app.Services.CreateScope())
 {
     var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
     var logger = scope.ServiceProvider.GetRequiredService<ILogger<Program>>();
-    
+
     try
     {
         // Check if database exists
         if (db.Database.CanConnect())
         {
             logger.LogInformation("Database exists, checking for pending migrations...");
-            
+
             // Check if migrations table exists (if not, db was created with EnsureCreated)
             var pendingMigrations = db.Database.GetPendingMigrations().ToList();
             var appliedMigrations = db.Database.GetAppliedMigrations().ToList();
-            
+
             if (appliedMigrations.Count == 0 && pendingMigrations.Count > 0)
             {
                 // Database was created with EnsureCreated, we need to mark migrations as applied
@@ -174,6 +208,8 @@ else
 // Use CORS - DEVE estar ANTES de UseAuthorization
 app.UseCors("AllowAll");
 
+app.UseRateLimiter();
+
 app.UseAuthentication();
 app.UseAuthorization();
 
@@ -193,6 +229,14 @@ app.MapRegisterEndpoint();
 app.MapLoginEndpoint();
 app.MapRefreshTokenEndpoint();
 app.MapGetCurrentUserEndpoint();
+app.MapForgotPasswordEndpoint();
+app.MapResetPasswordEndpoint();
+app.MapVerifyEmailEndpoints();
+
+// Map Account endpoints
+app.MapChangePasswordEndpoint();
+app.MapDeleteAccountEndpoint();
+app.MapGetPlanEndpoint();
 
 // Map Habit endpoints
 app.MapCreateHabit();

@@ -13,7 +13,7 @@ public static class GetCurrentUser
 {
     public record Query : IRequest<Result<Response>>;
 
-    public record Response(Guid UserId, string Email, string Name, string Timezone, DateTime CreatedAt);
+    public record Response(Guid UserId, string Email, string Name, string Timezone, DateTime CreatedAt, string Plan, bool IsEmailVerified);
 
     public class Handler : IRequestHandler<Query, Result<Response>>
     {
@@ -47,7 +47,9 @@ public static class GetCurrentUser
                 user.Email,
                 user.Name,
                 user.Timezone,
-                user.CreatedAt
+                user.CreatedAt,
+                user.Plan.ToString(),
+                user.IsEmailVerified
             ));
         }
     }
