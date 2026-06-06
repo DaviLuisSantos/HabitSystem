@@ -138,6 +138,90 @@ public static class DiagnosticsEndpoint
         .WithOpenApi()
         .AllowAnonymous();
 
+        app.MapPost("/api/diagnostics/fix-plan-schema", async ([FromServices] HabitSystem.Infrastructure.AppDbContext db) =>
+        {
+            var results = new List<string>();
+            try
+            {
+                var connection = db.Database.GetDbConnection();
+                await connection.OpenAsync();
+
+                using var pragmaCmd = connection.CreateCommand();
+                pragmaCmd.CommandText = "PRAGMA table_info(Users)";
+                var columns = new List<string>();
+                using (var reader = await pragmaCmd.ExecuteReaderAsync())
+                    while (await reader.ReadAsync())
+                        columns.Add(reader.GetString(1));
+
+                results.Add($"Columns found: {string.Join(", ", columns)}");
+
+                var toAdd = new Dictionary<string, string>
+                {
+                    ["Plan"] = "ALTER TABLE Users ADD COLUMN Plan TEXT NOT NULL DEFAULT 'Free'",
+                    ["IsEmailVerified"] = "ALTER TABLE Users ADD COLUMN IsEmailVerified INTEGER NOT NULL DEFAULT 0",
+                    ["EmailVerificationToken"] = "ALTER TABLE Users ADD COLUMN EmailVerificationToken TEXT",
+                    ["EmailVerificationTokenExpiry"] = "ALTER TABLE Users ADD COLUMN EmailVerificationTokenExpiry TEXT",
+                    ["PasswordResetToken"] = "ALTER TABLE Users ADD COLUMN PasswordResetToken TEXT",
+                    ["PasswordResetTokenExpiry"] = "ALTER TABLE Users ADD COLUMN PasswordResetTokenExpiry TEXT",
+                };
+
+                foreach (var (col, sql) in toAdd)
+                {
+                    if (!columns.Contains(col))
+                    {
+                        using var cmd = connection.CreateCommand();
+                        cmd.CommandText = sql;
+                        await cmd.ExecuteNonQueryAsync();
+                        results.Add($"Added column: {col}");
+                    }
+                    else
+                    {
+                        results.Add($"Column already exists: {col}");
+                    }
+                }
+
+                // Mark everyone as Pro/verified
+                using var updateCmd = connection.CreateCommand();
+                updateCmd.CommandText = "UPDATE Users SET Plan = 'Pro', IsEmailVerified = 1";
+                var rows = await updateCmd.ExecuteNonQueryAsync();
+                results.Add($"Updated {rows} user(s) to Pro/verified");
+
+                // Create migration history if missing and record all migrations
+                using var createHistCmd = connection.CreateCommand();
+                createHistCmd.CommandText = """
+                    CREATE TABLE IF NOT EXISTS "__EFMigrationsHistory" (
+                        "MigrationId" TEXT NOT NULL CONSTRAINT "PK___EFMigrationsHistory" PRIMARY KEY,
+                        "ProductVersion" TEXT NOT NULL
+                    )
+                    """;
+                await createHistCmd.ExecuteNonQueryAsync();
+
+                var migrations = new[]
+                {
+                    "20260406163922_InitialCreate",
+                    "20260407000703_AddAuthenticationFields",
+                    "20260605140750_AddPlanAndEmailVerification",
+                    "20260605144514_SeedOwnerAsPro",
+                };
+                foreach (var migId in migrations)
+                {
+                    using var insCmd = connection.CreateCommand();
+                    insCmd.CommandText = $"INSERT OR IGNORE INTO \"__EFMigrationsHistory\" VALUES ('{migId}', '9.0.9')";
+                    await insCmd.ExecuteNonQueryAsync();
+                    results.Add($"Migration recorded: {migId}");
+                }
+
+                return Results.Ok(new { success = true, results });
+            }
+            catch (Exception ex)
+            {
+                return Results.Ok(new { success = false, results, error = ex.Message });
+            }
+        })
+        .WithName("DiagnosticsFixPlanSchema")
+        .WithOpenApi()
+        .AllowAnonymous();
+
         app.MapPost("/api/diagnostics/test-auth", async ([FromServices] HabitSystem.Features.Auth.AuthService authService) =>
         {
             try

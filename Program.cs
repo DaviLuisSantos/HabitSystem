@@ -32,13 +32,14 @@ builder.Services.AddCors(options =>
 
 var connectionString = builder.Configuration.GetConnectionString("DefaultConnection");
 
-// Se estiver em produção, força caminho persistente
+// Se estiver em produção, força caminho persistente usando HOME env var
 if (builder.Environment.IsProduction())
 {
-    var dbPath = "/home/data/app.db";
-    var dbDir = Path.GetDirectoryName(dbPath)!;
-    Directory.CreateDirectory(dbDir);
+    var homeDir = Environment.GetEnvironmentVariable("HOME") ?? "/home";
+    var dbPath = Path.Combine(homeDir, "data", "app.db");
+    Directory.CreateDirectory(Path.GetDirectoryName(dbPath)!);
     connectionString = $"Data Source={dbPath}";
+    Console.WriteLine($"[STARTUP] Database path: {dbPath}");
 }
 
 builder.Services.AddDbContext<AppDbContext>(options =>
@@ -136,64 +137,19 @@ builder.Logging.AddConsole();
 
 var app = builder.Build();
 
-// Initialize database - handle both fresh installs and existing databases
 using (var scope = app.Services.CreateScope())
 {
     var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
     var logger = scope.ServiceProvider.GetRequiredService<ILogger<Program>>();
-
     try
     {
-        // Check if database exists
-        if (db.Database.CanConnect())
-        {
-            logger.LogInformation("Database exists, checking for pending migrations...");
-
-            // Check if migrations table exists (if not, db was created with EnsureCreated)
-            var pendingMigrations = db.Database.GetPendingMigrations().ToList();
-            var appliedMigrations = db.Database.GetAppliedMigrations().ToList();
-
-            if (appliedMigrations.Count == 0 && pendingMigrations.Count > 0)
-            {
-                // Database was created with EnsureCreated, we need to mark migrations as applied
-                logger.LogWarning("Database exists but has no migrations history. This may cause issues.");
-                // Try to apply migrations anyway - this might fail if schema already exists
-                try
-                {
-                    db.Database.Migrate();
-                }
-                catch (Exception migrationEx)
-                {
-                    logger.LogWarning(migrationEx, "Migration failed, database schema may already exist");
-                }
-            }
-            else if (pendingMigrations.Count > 0)
-            {
-                logger.LogInformation($"Applying {pendingMigrations.Count} pending migrations...");
-                db.Database.Migrate();
-            }
-            else
-            {
-                logger.LogInformation("Database is up to date");
-            }
-        }
-        else
-        {
-            logger.LogInformation("Database does not exist, creating with migrations...");
-            db.Database.Migrate();
-        }
+        db.Database.Migrate();
+        logger.LogInformation("Database migrations applied successfully.");
     }
     catch (Exception ex)
     {
-        logger.LogError(ex, "Error during database initialization. Attempting EnsureCreated as fallback...");
-        try
-        {
-            db.Database.EnsureCreated();
-        }
-        catch (Exception ensureEx)
-        {
-            logger.LogError(ensureEx, "EnsureCreated also failed");
-        }
+        logger.LogError(ex, "Database migration failed. App will start but may be unstable.");
+        throw;
     }
 }
 
