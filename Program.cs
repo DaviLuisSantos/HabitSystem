@@ -143,13 +143,70 @@ using (var scope = app.Services.CreateScope())
     var logger = scope.ServiceProvider.GetRequiredService<ILogger<Program>>();
     try
     {
+        var connection = db.Database.GetDbConnection();
+        connection.Open();
+
+        // Check if migration history table exists
+        using var checkHistCmd = connection.CreateCommand();
+        checkHistCmd.CommandText = "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='__EFMigrationsHistory'";
+        var historyExists = (long)checkHistCmd.ExecuteScalar()! > 0;
+
+        if (!historyExists)
+        {
+            // Check if Users table already exists (DB created before migrations were tracked)
+            using var checkUsersCmd = connection.CreateCommand();
+            checkUsersCmd.CommandText = "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='Users'";
+            var usersExists = (long)checkUsersCmd.ExecuteScalar()! > 0;
+
+            if (usersExists)
+            {
+                logger.LogWarning("Database exists without migration history. Bootstrapping history table.");
+
+                // Get existing columns to know which migrations are already applied
+                using var pragmaCmd = connection.CreateCommand();
+                pragmaCmd.CommandText = "PRAGMA table_info(Users)";
+                var columns = new List<string>();
+                using (var reader = pragmaCmd.ExecuteReader())
+                    while (reader.Read())
+                        columns.Add(reader.GetString(1));
+
+                logger.LogInformation("Existing columns: {Columns}", string.Join(", ", columns));
+
+                using var createHistCmd = connection.CreateCommand();
+                createHistCmd.CommandText = """
+                    CREATE TABLE "__EFMigrationsHistory" (
+                        "MigrationId" TEXT NOT NULL CONSTRAINT "PK___EFMigrationsHistory" PRIMARY KEY,
+                        "ProductVersion" TEXT NOT NULL
+                    )
+                    """;
+                createHistCmd.ExecuteNonQuery();
+
+                // InitialCreate — Users table exists
+                using var ins1 = connection.CreateCommand();
+                ins1.CommandText = "INSERT INTO \"__EFMigrationsHistory\" VALUES ('20260406163922_InitialCreate', '9.0.9')";
+                ins1.ExecuteNonQuery();
+
+                // AddAuthenticationFields — check for PasswordHash column
+                if (columns.Contains("PasswordHash"))
+                {
+                    using var ins2 = connection.CreateCommand();
+                    ins2.CommandText = "INSERT INTO \"__EFMigrationsHistory\" VALUES ('20260407000703_AddAuthenticationFields', '9.0.9')";
+                    ins2.ExecuteNonQuery();
+                }
+
+                logger.LogInformation("Migration history bootstrapped.");
+            }
+        }
+
+        connection.Close();
+
+        // Migrate() will now only apply truly pending migrations
         db.Database.Migrate();
         logger.LogInformation("Database migrations applied successfully.");
     }
     catch (Exception ex)
     {
-        logger.LogError(ex, "Database migration failed. App will start but may be unstable.");
-        throw;
+        logger.LogError(ex, "Database migration failed. App will continue — use /api/diagnostics/fix-plan-schema to repair.");
     }
 }
 
