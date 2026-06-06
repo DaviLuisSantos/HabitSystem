@@ -3,6 +3,7 @@ using HabitSystem.Features.Auth;
 using HabitSystem.Infrastructure;
 using MediatR;
 using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 
 namespace HabitSystem.Features.Account;
@@ -44,7 +45,7 @@ public static class DeleteAccount
 
     public static void MapDeleteAccountEndpoint(this IEndpointRouteBuilder app)
     {
-        app.MapDelete("/api/account", [Authorize] async (Command command, IMediator mediator) =>
+        app.MapDelete("/api/account", [Authorize] async ([FromBody] Command command, [FromServices] IMediator mediator) =>
         {
             var result = await mediator.Send(command);
             return result.IsSuccess
