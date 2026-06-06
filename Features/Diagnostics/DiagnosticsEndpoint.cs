@@ -138,6 +138,24 @@ public static class DiagnosticsEndpoint
         .WithOpenApi()
         .AllowAnonymous();
 
+        app.MapPost("/api/diagnostics/run-migrations", async ([FromServices] HabitSystem.Infrastructure.AppDbContext db) =>
+        {
+            try
+            {
+                var pending = db.Database.GetPendingMigrations().ToList();
+                db.Database.Migrate();
+                var applied = db.Database.GetAppliedMigrations().ToList();
+                return Results.Ok(new { success = true, migrationsApplied = pending, totalApplied = applied.Count });
+            }
+            catch (Exception ex)
+            {
+                return Results.Ok(new { success = false, error = ex.Message, inner = ex.InnerException?.Message });
+            }
+        })
+        .WithName("DiagnosticsRunMigrations")
+        .WithOpenApi()
+        .AllowAnonymous();
+
         app.MapPost("/api/diagnostics/fix-plan-schema", async ([FromServices] HabitSystem.Infrastructure.AppDbContext db) =>
         {
             var results = new List<string>();
