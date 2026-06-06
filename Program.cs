@@ -35,7 +35,10 @@ var connectionString = builder.Configuration.GetConnectionString("DefaultConnect
 // Se estiver em produção, força caminho persistente
 if (builder.Environment.IsProduction())
 {
-    connectionString = "Data Source=/home/data/app.db";
+    var dbPath = "/home/data/app.db";
+    var dbDir = Path.GetDirectoryName(dbPath)!;
+    Directory.CreateDirectory(dbDir);
+    connectionString = $"Data Source={dbPath}";
 }
 
 builder.Services.AddDbContext<AppDbContext>(options =>
