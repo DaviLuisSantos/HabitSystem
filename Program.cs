@@ -3,7 +3,6 @@ using HabitSystem.Features.CheckIns;
 using HabitSystem.Features.Scores;
 using HabitSystem.Features.Auth;
 using HabitSystem.Features.Account;
-using HabitSystem.Features.Diagnostics;
 using HabitSystem.Infrastructure;
 using HabitSystem.Services;
 using Microsoft.EntityFrameworkCore;
@@ -236,9 +235,6 @@ app.MapGet("/health", () => Results.Ok(new { status = "healthy" }))
     .WithName("Health")
     .WithOpenApi()
     .AllowAnonymous();
-
-// Map Diagnostics endpoints (REMOVER APÓS DEBUG)
-app.MapDiagnosticsEndpoint();
 
 // Map Auth endpoints
 app.MapRegisterEndpoint();
