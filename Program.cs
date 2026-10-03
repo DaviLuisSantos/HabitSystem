@@ -17,12 +17,16 @@ var builder = WebApplication.CreateBuilder(args);
 
 // Add services to the container.
 
-// Add CORS
+// Add CORS — only origins listed in Cors:AllowedOrigins (env: Cors__AllowedOrigins__0, __1, ...)
+var allowedOrigins = builder.Configuration.GetSection("Cors:AllowedOrigins").Get<string[]>() ?? Array.Empty<string>();
+if (allowedOrigins.Length == 0)
+    Console.WriteLine("[STARTUP] WARNING: Cors:AllowedOrigins is empty — browsers will be blocked by CORS.");
+
 builder.Services.AddCors(options =>
 {
-    options.AddPolicy("AllowAll", policy =>
+    options.AddPolicy("AllowFrontend", policy =>
     {
-        policy.AllowAnyOrigin()
+        policy.WithOrigins(allowedOrigins)
               .AllowAnyMethod()
               .AllowAnyHeader()
               .WithExposedHeaders("Content-Type", "X-Total-Count");
@@ -55,17 +59,14 @@ builder.Services.AddScoped<IEmailService, ConsoleEmailService>();
 var jwtSettings = builder.Configuration.GetSection("JwtSettings");
 var secret = jwtSettings["Secret"];
 
-// Log JWT configuration status
 Console.WriteLine($"[STARTUP] Environment: {builder.Environment.EnvironmentName}");
-Console.WriteLine($"[STARTUP] JWT Secret configured: {!string.IsNullOrEmpty(secret)}");
-Console.WriteLine($"[STARTUP] JWT Secret length: {secret?.Length ?? 0}");
 
-if (string.IsNullOrEmpty(secret))
-{
-    // Use a default secret for startup, but auth will fail
-    Console.WriteLine("[STARTUP] WARNING: JWT Secret not configured! Using fallback.");
-    secret = "FallbackSecretKeyForStartupOnlyDoNotUseInProduction123456";
-}
+// The secret is only committed for Development (appsettings.Development.json).
+// Anywhere else it must come from the environment (JwtSettings__Secret).
+if (string.IsNullOrWhiteSpace(secret) || secret.Length < 32)
+    throw new InvalidOperationException(
+        "JwtSettings:Secret is missing or shorter than 32 characters. " +
+        "Set the JwtSettings__Secret environment variable.");
 
 var issuer = jwtSettings["Issuer"] ?? "HabitSystem";
 var audience = jwtSettings["Audience"] ?? "HabitSystemUsers";
@@ -205,7 +206,7 @@ using (var scope = app.Services.CreateScope())
     }
     catch (Exception ex)
     {
-        logger.LogError(ex, "Database migration failed. App will continue — use /api/diagnostics/fix-plan-schema to repair.");
+        logger.LogError(ex, "Database migration failed. App will continue.");
     }
 }
 
@@ -214,14 +215,9 @@ if (app.Environment.IsDevelopment())
 {
     app.MapOpenApi();
 }
-else
-{
-    // Enable OpenAPI in production as well for Swagger UI
-    app.MapOpenApi();
-}
 
 // Use CORS - DEVE estar ANTES de UseAuthorization
-app.UseCors("AllowAll");
+app.UseCors("AllowFrontend");
 
 app.UseRateLimiter();
 
