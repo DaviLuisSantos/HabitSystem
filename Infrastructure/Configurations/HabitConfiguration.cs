@@ -1,6 +1,7 @@
 using HabitSystem.Domain;
 using HabitSystem.Domain.Enums;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.ChangeTracking;
 using Microsoft.EntityFrameworkCore.Metadata.Builders;
 using System.Text.Json;
 
@@ -41,7 +42,11 @@ public class HabitConfiguration : IEntityTypeConfiguration<Habit>
         builder.Property(h => h.FrequencyDays)
             .HasConversion(
                 v => v == null ? null : JsonSerializer.Serialize(v, (JsonSerializerOptions?)null),
-                v => v == null ? null : JsonSerializer.Deserialize<int[]>(v, (JsonSerializerOptions?)null));
+                v => v == null ? null : JsonSerializer.Deserialize<int[]>(v, (JsonSerializerOptions?)null),
+                new ValueComparer<int[]?>(
+                    (a, b) => a == null ? b == null : b != null && a.SequenceEqual(b),
+                    v => v == null ? 0 : v.Aggregate(0, (hash, d) => HashCode.Combine(hash, d)),
+                    v => v == null ? null : v.ToArray()));
 
         builder.Property(h => h.FrequencyTimes);
 

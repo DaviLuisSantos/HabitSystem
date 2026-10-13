@@ -1,5 +1,4 @@
 using HabitSystem.Common;
-using HabitSystem.Domain.Enums;
 using HabitSystem.Features.Auth;
 using HabitSystem.Infrastructure;
 using MediatR;
@@ -16,7 +15,7 @@ public static class GetPlan
         string Plan,
         bool IsEmailVerified,
         int ActiveHabits,
-        int HabitLimit   // -1 = unlimited
+        int? HabitLimit   // null = unlimited (no plan limits in v1.0)
     );
 
     public class Handler : IRequestHandler<Query, Result<Response>>
@@ -33,21 +32,19 @@ public static class GetPlan
         public async Task<Result<Response>> Handle(Query request, CancellationToken ct)
         {
             var userId = _http.HttpContext?.User.GetUserId();
-            if (userId == null) return Result<Response>.Failure("Not authenticated");
+            if (userId == null) return Result<Response>.Failure("Not authenticated", ErrorCodes.Unauthorized);
 
             var user = await _db.Users.FindAsync(new object[] { userId.Value }, ct);
-            if (user == null) return Result<Response>.Failure("User not found");
+            if (user == null) return Result<Response>.Failure("User not found", ErrorCodes.Unauthorized);
 
             var activeHabits = await _db.Habits
                 .CountAsync(h => h.UserId == userId.Value && h.IsActive, ct);
-
-            var habitLimit = user.Plan == Plan.Free ? Constants.FreePlanHabitLimit : -1;
 
             return Result<Response>.Success(new Response(
                 user.Plan.ToString(),
                 user.IsEmailVerified,
                 activeHabits,
-                habitLimit
+                null // v1.0: habit limit removed for every plan
             ));
         }
     }
@@ -59,7 +56,7 @@ public static class GetPlan
             var result = await mediator.Send(new Query());
             return result.IsSuccess
                 ? Results.Ok(result.Value)
-                : Results.BadRequest(new { error = result.Error });
+                : result.ToErrorResult();
         })
         .WithName("GetPlan")
         .WithOpenApi()

@@ -1,3 +1,4 @@
+using HabitSystem.Common;
 using HabitSystem.Features.Habits;
 using HabitSystem.Features.CheckIns;
 using HabitSystem.Features.Scores;
@@ -6,21 +7,42 @@ using HabitSystem.Features.Account;
 using HabitSystem.Infrastructure;
 using HabitSystem.Services;
 using Microsoft.EntityFrameworkCore;
+using System.Reflection;
 using System.Text.Json.Serialization;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.AspNetCore.Diagnostics;
+using Microsoft.AspNetCore.Diagnostics.HealthChecks;
+using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.AspNetCore.RateLimiting;
+using Microsoft.Extensions.Diagnostics.HealthChecks;
 using Microsoft.IdentityModel.Tokens;
 using System.Text;
 using System.Threading.RateLimiting;
 
 var builder = WebApplication.CreateBuilder(args);
 
+// Startup messages are logged once the app (and its logger) is built
+var startupWarnings = new List<string>();
+
+var appVersion = typeof(Program).Assembly
+    .GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion
+    .Split('+')[0] ?? "1.0.0";
+
 // Add services to the container.
+
+// Behind Azure App Service (reverse proxy): trust X-Forwarded-For / X-Forwarded-Proto so that
+// RemoteIpAddress (used by the rate limiter) is the real client IP.
+builder.Services.Configure<ForwardedHeadersOptions>(options =>
+{
+    options.ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto;
+    options.KnownNetworks.Clear();
+    options.KnownProxies.Clear();
+});
 
 // Add CORS — only origins listed in Cors:AllowedOrigins (env: Cors__AllowedOrigins__0, __1, ...)
 var allowedOrigins = builder.Configuration.GetSection("Cors:AllowedOrigins").Get<string[]>() ?? Array.Empty<string>();
 if (allowedOrigins.Length == 0)
-    Console.WriteLine("[STARTUP] WARNING: Cors:AllowedOrigins is empty — browsers will be blocked by CORS.");
+    startupWarnings.Add("Cors:AllowedOrigins is empty — browsers will be blocked by CORS.");
 
 builder.Services.AddCors(options =>
 {
@@ -35,31 +57,48 @@ builder.Services.AddCors(options =>
 
 var connectionString = builder.Configuration.GetConnectionString("DefaultConnection");
 
-// Se estiver em produção, força caminho persistente usando HOME env var
+// Em produção, força caminho persistente usando HOME env var ($HOME/data/app.db).
+// appsettings.Production.json intentionally has no ConnectionStrings entry.
+string? productionDbPath = null;
 if (builder.Environment.IsProduction())
 {
     var homeDir = Environment.GetEnvironmentVariable("HOME") ?? "/home";
-    var dbPath = Path.Combine(homeDir, "data", "app.db");
-    Directory.CreateDirectory(Path.GetDirectoryName(dbPath)!);
-    connectionString = $"Data Source={dbPath}";
-    Console.WriteLine($"[STARTUP] Database path: {dbPath}");
+    productionDbPath = Path.Combine(homeDir, "data", "app.db");
+    Directory.CreateDirectory(Path.GetDirectoryName(productionDbPath)!);
+    connectionString = $"Data Source={productionDbPath}";
 }
 
 builder.Services.AddDbContext<AppDbContext>(options =>
     options.UseSqlite(connectionString));
 
+builder.Services.AddHealthChecks()
+    .AddDbContextCheck<AppDbContext>();
+
 // Add Authentication services
 builder.Services.AddScoped<AuthService>();
 builder.Services.AddHttpContextAccessor();
 
-// Add Email service (pluggable: swap ConsoleEmailService for a real provider in production)
-builder.Services.AddScoped<IEmailService, ConsoleEmailService>();
+// Email: Resend when Email:ResendApiKey is set, otherwise console fallback
+var resendApiKey = builder.Configuration["Email:ResendApiKey"];
+var useResend = !string.IsNullOrWhiteSpace(resendApiKey);
+if (useResend)
+{
+    builder.Services.AddHttpClient<IEmailService, ResendEmailService>(client =>
+    {
+        client.BaseAddress = new Uri(ResendEmailService.ApiBaseUrl);
+        client.Timeout = TimeSpan.FromSeconds(10);
+    });
+}
+else
+{
+    builder.Services.AddScoped<IEmailService, ConsoleEmailService>();
+    if (!builder.Environment.IsDevelopment())
+        startupWarnings.Add("Email:ResendApiKey is not set — verification and password-reset e-mails will NOT be sent (set Email__ResendApiKey).");
+}
 
 // Configure JWT Authentication
 var jwtSettings = builder.Configuration.GetSection("JwtSettings");
 var secret = jwtSettings["Secret"];
-
-Console.WriteLine($"[STARTUP] Environment: {builder.Environment.EnvironmentName}");
 
 // The secret is only committed for Development (appsettings.Development.json).
 // Anywhere else it must come from the environment (JwtSettings__Secret).
@@ -102,15 +141,27 @@ builder.Services.ConfigureHttpJsonOptions(options =>
     options.SerializerOptions.Converters.Add(new JsonStringEnumConverter());
 });
 
-// Rate limiting — protects against brute force / abuse
+// Malformed bodies / bad parameters are thrown to the global exception handler,
+// which answers 400 { error, code: "validation" } in every environment
+builder.Services.Configure<RouteHandlerOptions>(options => options.ThrowOnBadRequest = true);
+
+// Rate limiting — protects against brute force / abuse (partitioned by client IP)
+static string ClientIp(HttpContext context) => context.Connection.RemoteIpAddress?.ToString() ?? "unknown";
+
 builder.Services.AddRateLimiter(options =>
 {
     options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
+    options.OnRejected = async (context, ct) =>
+    {
+        context.HttpContext.Response.StatusCode = StatusCodes.Status429TooManyRequests;
+        await context.HttpContext.Response.WriteAsJsonAsync(
+            new { error = "Muitas requisições. Tente novamente em instantes.", code = ErrorCodes.RateLimited }, ct);
+    };
 
     // Global: 120 requests per minute per IP (applies to all endpoints)
     options.GlobalLimiter = PartitionedRateLimiter.Create<HttpContext, string>(context =>
         RateLimitPartition.GetFixedWindowLimiter(
-            partitionKey: context.Connection.RemoteIpAddress?.ToString() ?? "unknown",
+            partitionKey: ClientIp(context),
             factory: _ => new FixedWindowRateLimiterOptions
             {
                 PermitLimit = 120,
@@ -119,23 +170,32 @@ builder.Services.AddRateLimiter(options =>
                 QueueLimit = 0,
             }));
 
-    // Auth policy: stricter limit for login/register/forgot-password (10 req/min per IP)
-    options.AddFixedWindowLimiter("auth", opt =>
-    {
-        opt.Window = TimeSpan.FromMinutes(1);
-        opt.PermitLimit = 10;
-        opt.QueueProcessingOrder = QueueProcessingOrder.OldestFirst;
-        opt.QueueLimit = 0;
-    });
+    // Auth policy: stricter limit for auth endpoints (10 req/min per IP)
+    options.AddPolicy("auth", context =>
+        RateLimitPartition.GetFixedWindowLimiter(
+            partitionKey: ClientIp(context),
+            factory: _ => new FixedWindowRateLimiterOptions
+            {
+                PermitLimit = 10,
+                Window = TimeSpan.FromMinutes(1),
+                QueueProcessingOrder = QueueProcessingOrder.OldestFirst,
+                QueueLimit = 0,
+            }));
 });
 
-builder.Services.AddControllers();
 // Learn more about configuring OpenAPI at https://aka.ms/aspnet/openapi
 builder.Services.AddOpenApi();
 
 builder.Logging.AddConsole();
 
 var app = builder.Build();
+
+app.Logger.LogInformation("Arco API v{Version} starting. Environment: {Environment}", appVersion, app.Environment.EnvironmentName);
+if (productionDbPath != null)
+    app.Logger.LogInformation("Database path: {DbPath}", productionDbPath);
+app.Logger.LogInformation("E-mail provider: {Provider}", useResend ? "Resend" : "Console (no e-mails sent)");
+foreach (var warning in startupWarnings)
+    app.Logger.LogWarning("{Warning}", warning);
 
 using (var scope = app.Services.CreateScope())
 {
@@ -206,11 +266,33 @@ using (var scope = app.Services.CreateScope())
     }
     catch (Exception ex)
     {
-        logger.LogError(ex, "Database migration failed. App will continue.");
+        // Never run against a half-migrated schema: fail startup
+        logger.LogCritical(ex, "Database migration failed. Aborting startup.");
+        throw;
     }
 }
 
 // Configure the HTTP request pipeline.
+
+// Must run first so RemoteIpAddress/Scheme reflect the real client
+app.UseForwardedHeaders();
+
+// Global exception handler: never leak stack traces, consistent error body
+app.UseExceptionHandler(errorApp => errorApp.Run(async context =>
+{
+    var exception = context.Features.Get<IExceptionHandlerFeature>()?.Error;
+
+    if (exception is BadHttpRequestException badRequest)
+    {
+        context.Response.StatusCode = badRequest.StatusCode;
+        await context.Response.WriteAsJsonAsync(new { error = "Requisição inválida", code = ErrorCodes.Validation });
+        return;
+    }
+
+    context.Response.StatusCode = StatusCodes.Status500InternalServerError;
+    await context.Response.WriteAsJsonAsync(new { error = "Erro interno", code = ErrorCodes.InternalError });
+}));
+
 if (app.Environment.IsDevelopment())
 {
     app.MapOpenApi();
@@ -224,11 +306,23 @@ app.UseRateLimiter();
 app.UseAuthentication();
 app.UseAuthorization();
 
-app.MapControllers();
+// Health check endpoint for Azure monitoring (includes a DB connectivity check)
+app.MapHealthChecks("/health", new HealthCheckOptions
+{
+    ResponseWriter = async (context, report) =>
+    {
+        context.Response.ContentType = "application/json";
+        await context.Response.WriteAsJsonAsync(new
+        {
+            status = report.Status == HealthStatus.Healthy ? "healthy" : "unhealthy",
+            version = appVersion
+        });
+    }
+})
+.AllowAnonymous();
 
-// Health check endpoint for Azure monitoring
-app.MapGet("/health", () => Results.Ok(new { status = "healthy" }))
-    .WithName("Health")
+app.MapGet("/api/version", () => Results.Ok(new { version = appVersion }))
+    .WithName("GetVersion")
     .WithOpenApi()
     .AllowAnonymous();
 
@@ -236,6 +330,7 @@ app.MapGet("/health", () => Results.Ok(new { status = "healthy" }))
 app.MapRegisterEndpoint();
 app.MapLoginEndpoint();
 app.MapRefreshTokenEndpoint();
+app.MapLogoutEndpoint();
 app.MapGetCurrentUserEndpoint();
 app.MapForgotPasswordEndpoint();
 app.MapResetPasswordEndpoint();
@@ -252,6 +347,7 @@ app.MapGetHabits();
 app.MapGetHabitById();
 app.MapUpdateHabit();
 app.MapArchiveHabit();
+app.MapRestoreHabit();
 
 // Map CheckIn endpoints
 app.MapCreateCheckIn();

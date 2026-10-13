@@ -11,11 +11,13 @@ namespace HabitSystem.Features.Habits;
 public class ArchiveHabitHandler : IRequestHandler<ArchiveHabitCommand, Result>
 {
     private readonly AppDbContext _db;
+    private readonly IMediator _mediator;
     private readonly IHttpContextAccessor _httpContextAccessor;
 
-    public ArchiveHabitHandler(AppDbContext db, IHttpContextAccessor httpContextAccessor)
+    public ArchiveHabitHandler(AppDbContext db, IMediator mediator, IHttpContextAccessor httpContextAccessor)
     {
         _db = db;
+        _mediator = mediator;
         _httpContextAccessor = httpContextAccessor;
     }
 
@@ -24,19 +26,25 @@ public class ArchiveHabitHandler : IRequestHandler<ArchiveHabitCommand, Result>
         // Get authenticated user ID
         var userId = _httpContextAccessor.HttpContext?.User.GetUserId();
         if (userId == null)
-            return Result.Failure("User not authenticated");
+            return Result.Failure("User not authenticated", ErrorCodes.Unauthorized);
 
         var habit = await _db.Habits
             .FirstOrDefaultAsync(h => h.Id == request.Id && h.UserId == userId.Value, cancellationToken);
 
         if (habit == null)
-            return Result.Failure("Habit not found");
+            return Result.Failure("Habit not found", ErrorCodes.NotFound);
 
-        // Soft delete - preserve history
-        habit.IsActive = false;
-        habit.ArchivedAt = DateTime.UtcNow;
+        // Soft delete - preserve history. Idempotent: keep the original ArchivedAt.
+        if (habit.IsActive || habit.ArchivedAt == null)
+        {
+            habit.IsActive = false;
+            habit.ArchivedAt = DateTime.UtcNow;
+            await _db.SaveChangesAsync(cancellationToken);
+        }
 
-        await _db.SaveChangesAsync(cancellationToken);
+        // Habit no longer counts from today on
+        var today = await _db.GetUserTodayAsync(userId.Value, cancellationToken);
+        await _mediator.Send(new Scores.RecalculateScoreCommand(today, userId.Value), cancellationToken);
 
         return Result.Success();
     }
@@ -55,10 +63,10 @@ public static class ArchiveHabitEndpoint
             [FromServices] IMediator mediator) =>
         {
             var result = await mediator.Send(new ArchiveHabitCommand(id));
-            
-            return result.IsSuccess 
+
+            return result.IsSuccess
                 ? Results.NoContent()
-                : Results.NotFound(new { error = result.Error });
+                : result.ToErrorResult();
         })
         .WithName("ArchiveHabit")
         .WithOpenApi()

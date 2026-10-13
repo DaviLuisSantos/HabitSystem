@@ -34,12 +34,14 @@ public class User
     public string PasswordHash { get; set; } = string.Empty;
 
     /// <summary>
-    /// Current refresh token for this user
+    /// LEGACY (unused since v1.0): single refresh token per user.
+    /// Refresh tokens now live in the RefreshTokens table (<see cref="UserRefreshToken"/>).
+    /// Kept only so the existing DB column is not dropped.
     /// </summary>
     public string? RefreshToken { get; set; }
 
     /// <summary>
-    /// When the refresh token expires
+    /// LEGACY (unused since v1.0). See <see cref="RefreshToken"/>.
     /// </summary>
     public DateTime? RefreshTokenExpiryTime { get; set; }
 
@@ -93,4 +95,9 @@ public class User
     /// Daily scores calculated for this user
     /// </summary>
     public ICollection<DailyScore> DailyScores { get; set; } = new List<DailyScore>();
+
+    /// <summary>
+    /// Refresh tokens (one per device/session)
+    /// </summary>
+    public ICollection<UserRefreshToken> RefreshTokens { get; set; } = new List<UserRefreshToken>();
 }

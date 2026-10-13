@@ -23,11 +23,13 @@ public record UpdateHabitRequest(
 public class UpdateHabitHandler : IRequestHandler<UpdateHabitCommand, Result<HabitDto>>
 {
     private readonly AppDbContext _db;
+    private readonly IMediator _mediator;
     private readonly IHttpContextAccessor _httpContextAccessor;
 
-    public UpdateHabitHandler(AppDbContext db, IHttpContextAccessor httpContextAccessor)
+    public UpdateHabitHandler(AppDbContext db, IMediator mediator, IHttpContextAccessor httpContextAccessor)
     {
         _db = db;
+        _mediator = mediator;
         _httpContextAccessor = httpContextAccessor;
     }
 
@@ -36,57 +38,46 @@ public class UpdateHabitHandler : IRequestHandler<UpdateHabitCommand, Result<Hab
         // Get authenticated user ID
         var userId = _httpContextAccessor.HttpContext?.User.GetUserId();
         if (userId == null)
-            return Result<HabitDto>.Failure("User not authenticated");
+            return Result<HabitDto>.Failure("User not authenticated", ErrorCodes.Unauthorized);
 
-        // Validation
-        if (string.IsNullOrWhiteSpace(request.Request.Name))
-            return Result<HabitDto>.Failure("Habit name is required");
+        // Validation (also normalizes FrequencyDays to 0=Sunday..6=Saturday)
+        var validation = HabitValidation.Validate(
+            request.Request.Name,
+            request.Request.Description,
+            request.Request.Weight,
+            request.Request.PartialWeight,
+            request.Request.FrequencyType,
+            request.Request.FrequencyDays,
+            request.Request.FrequencyTimes);
 
-        if (request.Request.Weight < 1 || request.Request.Weight > 10)
-            return Result<HabitDto>.Failure("Weight must be between 1 and 10");
+        if (!validation.IsSuccess)
+            return Result<HabitDto>.Failure(validation.Error!, validation.Code!);
 
-        if (request.Request.PartialWeight < 0 || request.Request.PartialWeight > 10)
-            return Result<HabitDto>.Failure("Partial weight must be between 0 and 10");
-
-        if (request.Request.FrequencyType == FrequencyType.SpecificDays && 
-            (request.Request.FrequencyDays == null || request.Request.FrequencyDays.Length == 0))
-            return Result<HabitDto>.Failure("FrequencyDays is required for SpecificDays frequency type");
-
-        if (request.Request.FrequencyType == FrequencyType.XTimesWeek && 
-            (request.Request.FrequencyTimes == null || request.Request.FrequencyTimes < 1))
-            return Result<HabitDto>.Failure("FrequencyTimes is required for XTimesWeek frequency type");
+        var input = validation.Value!;
 
         // Find habit
         var habit = await _db.Habits
             .FirstOrDefaultAsync(h => h.Id == request.Id && h.UserId == userId.Value, cancellationToken);
 
         if (habit == null)
-            return Result<HabitDto>.Failure("Habit not found");
+            return Result<HabitDto>.Failure("Habit not found", ErrorCodes.NotFound);
 
         // Update habit
-        habit.Name = request.Request.Name;
-        habit.Description = request.Request.Description;
-        habit.Weight = request.Request.Weight;
-        habit.PartialWeight = request.Request.PartialWeight;
-        habit.FrequencyType = request.Request.FrequencyType;
-        habit.FrequencyDays = request.Request.FrequencyDays;
-        habit.FrequencyTimes = request.Request.FrequencyTimes;
+        habit.Name = input.Name;
+        habit.Description = input.Description;
+        habit.Weight = input.Weight;
+        habit.PartialWeight = input.PartialWeight;
+        habit.FrequencyType = input.FrequencyType;
+        habit.FrequencyDays = input.FrequencyDays;
+        habit.FrequencyTimes = input.FrequencyTimes;
 
         await _db.SaveChangesAsync(cancellationToken);
 
-        var response = new HabitDto(
-            habit.Id,
-            habit.Name,
-            habit.Description,
-            habit.Weight,
-            habit.PartialWeight,
-            habit.FrequencyType,
-            habit.FrequencyDays,
-            habit.FrequencyTimes,
-            habit.IsActive,
-            habit.CreatedAt,
-            habit.ArchivedAt
-        );
+        // Weights / frequency changed: refresh today's cached score
+        var today = await _db.GetUserTodayAsync(userId.Value, cancellationToken);
+        await _mediator.Send(new Scores.RecalculateScoreCommand(today, userId.Value), cancellationToken);
+
+        var response = habit.ToDto();
 
         return Result<HabitDto>.Success(response);
     }
@@ -109,7 +100,7 @@ public static class UpdateHabitEndpoint
             
             return result.IsSuccess 
                 ? Results.Ok(result.Value)
-                : Results.BadRequest(new { error = result.Error });
+                : result.ToErrorResult();
         })
         .WithName("UpdateHabit")
         .WithOpenApi()

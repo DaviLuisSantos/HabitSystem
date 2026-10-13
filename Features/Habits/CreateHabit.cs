@@ -52,50 +52,37 @@ public class CreateHabitHandler : IRequestHandler<CreateHabitCommand, Result<Cre
         // Get authenticated user ID
         var userId = _httpContextAccessor.HttpContext?.User.GetUserId();
         if (userId == null)
-            return Result<CreateHabitResponse>.Failure("User not authenticated");
+            return Result<CreateHabitResponse>.Failure("User not authenticated", ErrorCodes.Unauthorized);
 
-        // Validation
-        if (string.IsNullOrWhiteSpace(request.Request.Name))
-            return Result<CreateHabitResponse>.Failure("Habit name is required");
+        // Validation (also normalizes FrequencyDays to 0=Sunday..6=Saturday)
+        var validation = HabitValidation.Validate(
+            request.Request.Name,
+            request.Request.Description,
+            request.Request.Weight,
+            request.Request.PartialWeight,
+            request.Request.FrequencyType,
+            request.Request.FrequencyDays,
+            request.Request.FrequencyTimes);
 
-        if (request.Request.Weight < 1 || request.Request.Weight > 10)
-            return Result<CreateHabitResponse>.Failure("Weight must be between 1 and 10");
+        if (!validation.IsSuccess)
+            return Result<CreateHabitResponse>.Failure(validation.Error!, validation.Code!);
 
-        if (request.Request.PartialWeight < 0 || request.Request.PartialWeight > 10)
-            return Result<CreateHabitResponse>.Failure("Partial weight must be between 0 and 10");
+        var input = validation.Value!;
 
-        if (request.Request.FrequencyType == FrequencyType.SpecificDays && 
-            (request.Request.FrequencyDays == null || request.Request.FrequencyDays.Length == 0))
-            return Result<CreateHabitResponse>.Failure("FrequencyDays is required for SpecificDays frequency type");
-
-        if (request.Request.FrequencyType == FrequencyType.XTimesWeek &&
-            (request.Request.FrequencyTimes == null || request.Request.FrequencyTimes < 1))
-            return Result<CreateHabitResponse>.Failure("FrequencyTimes is required for XTimesWeek frequency type");
-
-        // Enforce free plan habit limit
-        var user = await _db.Users.FindAsync(new object[] { userId.Value }, cancellationToken);
-        if (user?.Plan == Domain.Enums.Plan.Free)
-        {
-            var activeCount = await _db.Habits
-                .CountAsync(h => h.UserId == userId.Value && h.IsActive, cancellationToken);
-
-            if (activeCount >= Common.Constants.FreePlanHabitLimit)
-                return Result<CreateHabitResponse>.Failure(
-                    $"Free plan is limited to {Common.Constants.FreePlanHabitLimit} active habits. Upgrade to Pro for unlimited habits.");
-        }
+        // v1.0: no plan-based habit limit
 
         // Create habit
         var habit = new Habit
         {
             Id = Guid.NewGuid(),
             UserId = userId.Value,
-            Name = request.Request.Name,
-            Description = request.Request.Description,
-            Weight = request.Request.Weight,
-            PartialWeight = request.Request.PartialWeight,
-            FrequencyType = request.Request.FrequencyType,
-            FrequencyDays = request.Request.FrequencyDays,
-            FrequencyTimes = request.Request.FrequencyTimes,
+            Name = input.Name,
+            Description = input.Description,
+            Weight = input.Weight,
+            PartialWeight = input.PartialWeight,
+            FrequencyType = input.FrequencyType,
+            FrequencyDays = input.FrequencyDays,
+            FrequencyTimes = input.FrequencyTimes,
             IsActive = true,
             CreatedAt = DateTime.UtcNow
         };
@@ -103,8 +90,8 @@ public class CreateHabitHandler : IRequestHandler<CreateHabitCommand, Result<Cre
         _db.Habits.Add(habit);
         await _db.SaveChangesAsync(cancellationToken);
 
-        // Recalculate score for today since a new habit was added
-        var today = DateOnly.FromDateTime(DateTime.UtcNow);
+        // Recalculate score for the user's today since a new habit was added
+        var today = await _db.GetUserTodayAsync(userId.Value, cancellationToken);
         await _mediator.Send(new Scores.RecalculateScoreCommand(today, userId.Value), cancellationToken);
 
         var response = new CreateHabitResponse(
@@ -140,7 +127,7 @@ public static class CreateHabitEndpoint
             
             return result.IsSuccess 
                 ? Results.Created($"/api/habits/{result.Value!.Id}", result.Value)
-                : Results.BadRequest(new { error = result.Error });
+                : result.ToErrorResult();
         })
         .WithName("CreateHabit")
         .WithOpenApi()

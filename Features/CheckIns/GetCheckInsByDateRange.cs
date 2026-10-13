@@ -24,7 +24,10 @@ public class GetCheckInsByDateRangeHandler : IRequestHandler<GetCheckInsByDateRa
         // Get authenticated user ID
         var userId = _httpContextAccessor.HttpContext?.User.GetUserId();
         if (userId == null)
-            return Result<List<CheckInDto>>.Failure("User not authenticated");
+            return Result<List<CheckInDto>>.Failure("User not authenticated", ErrorCodes.Unauthorized);
+
+        if (request.EndDate < request.StartDate)
+            return Result<List<CheckInDto>>.Failure("endDate must be on or after startDate");
 
         var checkIns = await _db.CheckIns
             .Include(c => c.Habit)
@@ -65,7 +68,7 @@ public static class GetCheckInsByDateRangeEndpoint
             
             return result.IsSuccess 
                 ? Results.Ok(result.Value)
-                : Results.BadRequest(new { error = result.Error });
+                : result.ToErrorResult();
         })
         .WithName("GetCheckInsByDateRange")
         .WithOpenApi()

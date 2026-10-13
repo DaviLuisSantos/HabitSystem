@@ -24,7 +24,7 @@ public class GetHabitByIdHandler : IRequestHandler<GetHabitByIdQuery, Result<Hab
         // Get authenticated user ID
         var userId = _httpContextAccessor.HttpContext?.User.GetUserId();
         if (userId == null)
-            return Result<HabitDto>.Failure("User not authenticated");
+            return Result<HabitDto>.Failure("User not authenticated", ErrorCodes.Unauthorized);
 
         var habit = await _db.Habits
             .Where(h => h.Id == request.Id && h.UserId == userId.Value)
@@ -44,7 +44,7 @@ public class GetHabitByIdHandler : IRequestHandler<GetHabitByIdQuery, Result<Hab
             .FirstOrDefaultAsync(cancellationToken);
 
         if (habit == null)
-            return Result<HabitDto>.Failure("Habit not found");
+            return Result<HabitDto>.Failure("Habit not found", ErrorCodes.NotFound);
 
         return Result<HabitDto>.Success(habit);
     }
@@ -66,7 +66,7 @@ public static class GetHabitByIdEndpoint
             
             return result.IsSuccess 
                 ? Results.Ok(result.Value)
-                : Results.NotFound(new { error = result.Error });
+                : result.ToErrorResult();
         })
         .WithName("GetHabitById")
         .WithOpenApi()

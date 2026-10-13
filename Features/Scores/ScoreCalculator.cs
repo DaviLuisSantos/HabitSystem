@@ -3,12 +3,22 @@ using HabitSystem.Domain;
 using HabitSystem.Domain.Enums;
 using HabitSystem.Infrastructure;
 using MediatR;
+using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 
 namespace HabitSystem.Features.Scores;
 
 /// <summary>
-/// Calculates and updates daily scores based on check-ins
+/// Calculates daily scores based on habits and check-ins.
+///
+/// Rules (per date D, in the user's timezone):
+/// - A habit counts on D only if it was created on or before D (CreatedAt converted to the user's
+///   local date) and it is active, or it was archived after D (ArchivedAt local date &gt; D).
+///   Archived habits with no ArchivedAt (legacy rows) never count — same as the pre-v1.0 behaviour.
+/// - Daily habits are expected every day; SpecificDays habits on FrequencyDays
+///   (0=Sunday..6=Saturday, legacy 7 also treated as Sunday); XTimesWeek habits only when checked in.
+/// - Only habits that count toward TotalPossible can add to TotalEarned, so the score never exceeds 100%.
+/// - Percentage is clamped to 0..100.
 /// </summary>
 public class ScoreCalculator
 {
@@ -20,139 +30,199 @@ public class ScoreCalculator
     }
 
     /// <summary>
-    /// Calculates the daily score for a given date and user
+    /// Computes scores for every date in [startDate, endDate] without writing to the database
     /// </summary>
-    public async Task<DailyScore> CalculateScore(DateOnly date, Guid userId, CancellationToken cancellationToken = default)
+    public async Task<List<DailyScore>> ComputeScores(DateOnly startDate, DateOnly endDate, Guid userId, CancellationToken cancellationToken = default)
     {
-        // Get all active habits for the user
+        var timeZone = await _db.GetUserTimeZoneAsync(userId, cancellationToken);
+
+        // All habits (including archived) — filtered per date below
         var habits = await _db.Habits
-            .Where(h => h.UserId == userId && h.IsActive)
+            .AsNoTracking()
+            .Where(h => h.UserId == userId)
             .ToListAsync(cancellationToken);
 
-        // Get check-ins for this date
         var checkIns = await _db.CheckIns
-            .Include(c => c.Habit)
-            .Where(c => c.UserId == userId && c.Date == date)
+            .AsNoTracking()
+            .Where(c => c.UserId == userId && c.Date >= startDate && c.Date <= endDate)
             .ToListAsync(cancellationToken);
 
-        // Calculate total possible score (sum of weights of expected habits)
-        // For XTimesWeek habits, only add to totalPossible if there's a check-in
-        short totalPossible = 0;
-        foreach (var habit in habits)
+        var habitWindows = habits.ToDictionary(h => h.Id, h => (
+            Habit: h,
+            CreatedOn: UserClock.ToLocalDate(h.CreatedAt, timeZone),
+            ArchivedOn: h.ArchivedAt.HasValue ? UserClock.ToLocalDate(h.ArchivedAt.Value, timeZone) : (DateOnly?)null));
+
+        var results = new List<DailyScore>();
+        var now = DateTime.UtcNow;
+
+        for (var date = startDate; date <= endDate; date = date.AddDays(1))
         {
-            if (IsHabitExpectedOnDate(habit, date))
+            var dayCheckIns = checkIns.Where(c => c.Date == date).ToDictionary(c => c.HabitId);
+
+            int totalPossible = 0;
+            int totalEarned = 0;
+
+            foreach (var (habit, createdOn, archivedOn) in habitWindows.Values)
             {
-                // Daily and SpecificDays habits always count
+                if (!CountsOnDate(habit, createdOn, archivedOn, date))
+                    continue;
+
+                dayCheckIns.TryGetValue(habit.Id, out var checkIn);
+
+                var expected = IsHabitExpectedOnDate(habit, date)
+                    // XTimesWeek habits only count if user did a check-in
+                    || (habit.FrequencyType == FrequencyType.XTimesWeek && checkIn != null);
+
+                if (!expected)
+                    continue;
+
                 totalPossible += habit.Weight;
+                if (checkIn != null)
+                    totalEarned += Math.Min(GetEarnedWeight(habit, checkIn.Status), (int)habit.Weight);
             }
-            else if (habit.FrequencyType == FrequencyType.XTimesWeek && HasCheckInOnDate(habit.Id, checkIns))
-            {
-                // XTimesWeek habits only count if user did a check-in
-                totalPossible += habit.Weight;
-            }
-        }
 
-        // Calculate total earned score
-        short totalEarned = 0;
-        foreach (var checkIn in checkIns)
-        {
-            totalEarned += GetEarnedWeight(checkIn);
-        }
+            decimal percentage = totalPossible > 0 ? (decimal)totalEarned / totalPossible * 100 : 0;
+            percentage = Math.Clamp(Math.Round(percentage, 2), 0m, 100m);
 
-        // Calculate percentage
-        decimal percentage = totalPossible > 0 ? (decimal)totalEarned / totalPossible * 100 : 0;
-
-        // Find or create daily score
-        var dailyScore = await _db.DailyScores
-            .FirstOrDefaultAsync(d => d.UserId == userId && d.Date == date, cancellationToken);
-
-        if (dailyScore == null)
-        {
-            dailyScore = new DailyScore
+            results.Add(new DailyScore
             {
                 Id = Guid.NewGuid(),
                 UserId = userId,
                 Date = date,
-                TotalPossible = totalPossible,
-                TotalEarned = totalEarned,
-                Percentage = Math.Round(percentage, 2),
-                CalculatedAt = DateTime.UtcNow
-            };
-            _db.DailyScores.Add(dailyScore);
-        }
-        else
-        {
-            // Update existing score
-            dailyScore.TotalPossible = totalPossible;
-            dailyScore.TotalEarned = totalEarned;
-            dailyScore.Percentage = Math.Round(percentage, 2);
-            dailyScore.CalculatedAt = DateTime.UtcNow;
+                TotalPossible = (short)Math.Min(totalPossible, short.MaxValue),
+                TotalEarned = (short)Math.Min(totalEarned, short.MaxValue),
+                Percentage = percentage,
+                CalculatedAt = now
+            });
         }
 
-        await _db.SaveChangesAsync(cancellationToken);
-
-        return dailyScore;
+        return results;
     }
 
     /// <summary>
-    /// Determines if a habit is expected on a given date based on its frequency
+    /// Computes the score for a single date without writing to the database
     /// </summary>
-    private bool IsHabitExpectedOnDate(Habit habit, DateOnly date)
+    public async Task<DailyScore> ComputeScore(DateOnly date, Guid userId, CancellationToken cancellationToken = default)
+        => (await ComputeScores(date, date, userId, cancellationToken))[0];
+
+    /// <summary>
+    /// Calculates the daily score for a given date and user and upserts the cached DailyScore row
+    /// </summary>
+    public async Task<DailyScore> CalculateScore(DateOnly date, Guid userId, CancellationToken cancellationToken = default)
+    {
+        var computed = await ComputeScore(date, userId, cancellationToken);
+
+        for (var attempt = 0; ; attempt++)
+        {
+            // Find or create daily score
+            var dailyScore = await _db.DailyScores
+                .FirstOrDefaultAsync(d => d.UserId == userId && d.Date == date, cancellationToken);
+
+            if (dailyScore == null)
+            {
+                dailyScore = computed;
+                _db.DailyScores.Add(dailyScore);
+            }
+            else
+            {
+                // Update existing score
+                dailyScore.TotalPossible = computed.TotalPossible;
+                dailyScore.TotalEarned = computed.TotalEarned;
+                dailyScore.Percentage = computed.Percentage;
+                dailyScore.CalculatedAt = computed.CalculatedAt;
+            }
+
+            try
+            {
+                await _db.SaveChangesAsync(cancellationToken);
+                return dailyScore;
+            }
+            catch (DbUpdateException ex) when (attempt == 0 && ex.InnerException is SqliteException { SqliteErrorCode: 19 })
+            {
+                // A concurrent recalculation inserted the same (UserId, Date): retry as an update
+                _db.Entry(dailyScore).State = EntityState.Detached;
+            }
+        }
+    }
+
+    /// <summary>
+    /// A habit counts on a date if it existed (created on/before) and was not archived on/before that date
+    /// </summary>
+    private static bool CountsOnDate(Habit habit, DateOnly createdOn, DateOnly? archivedOn, DateOnly date)
+    {
+        if (date < createdOn)
+            return false;
+
+        if (habit.IsActive)
+            return true;
+
+        // Legacy archived rows without ArchivedAt: excluded from every date
+        return archivedOn.HasValue && archivedOn.Value > date;
+    }
+
+    /// <summary>
+    /// Determines if a habit is expected on a given date based on its frequency.
+    /// Days use the JS getDay() convention: 0=Sunday..6=Saturday (7 also accepted as Sunday).
+    /// </summary>
+    private static bool IsHabitExpectedOnDate(Habit habit, DateOnly date)
     {
         return habit.FrequencyType switch
         {
             FrequencyType.Daily => true,
-            
-            FrequencyType.SpecificDays => 
-                habit.FrequencyDays != null && 
-                habit.FrequencyDays.Contains((int)date.DayOfWeek == 0 ? 7 : (int)date.DayOfWeek),
-            
+
+            FrequencyType.SpecificDays =>
+                habit.FrequencyDays != null &&
+                habit.FrequencyDays.Any(d => (d == 7 ? 0 : d) == (int)date.DayOfWeek),
+
             // XTimesWeek: Not expected on any specific day (user chooses when)
             // These habits only count in the score when a check-in is made
             FrequencyType.XTimesWeek => false,
-            
+
             _ => false
         };
     }
 
     /// <summary>
-    /// Checks if a habit has a check-in on a given date
-    /// </summary>
-    private bool HasCheckInOnDate(Guid habitId, List<CheckIn> checkIns)
-    {
-        return checkIns.Any(c => c.HabitId == habitId);
-    }
-
-    /// <summary>
     /// Gets the earned weight for a check-in based on its status
     /// </summary>
-    private short GetEarnedWeight(CheckIn checkIn)
+    private static int GetEarnedWeight(Habit habit, CheckInStatus status)
     {
-        return checkIn.Status switch
+        return status switch
         {
-            CheckInStatus.Done => checkIn.Habit.Weight,
-            CheckInStatus.Partial => checkIn.Habit.PartialWeight,
+            CheckInStatus.Done => habit.Weight,
+            CheckInStatus.Partial => habit.PartialWeight,
             CheckInStatus.Skipped => 0,
             _ => 0
         };
     }
 }
 
-// Handler for recalculating score (called after check-in create/update)
+// Handler for recalculating score (called after check-in and habit create/update/archive/restore)
 public class RecalculateScoreHandler : IRequestHandler<RecalculateScoreCommand, Result>
 {
     private readonly AppDbContext _db;
+    private readonly ILogger<RecalculateScoreHandler> _logger;
 
-    public RecalculateScoreHandler(AppDbContext db)
+    public RecalculateScoreHandler(AppDbContext db, ILogger<RecalculateScoreHandler> logger)
     {
         _db = db;
+        _logger = logger;
     }
 
     public async Task<Result> Handle(RecalculateScoreCommand request, CancellationToken cancellationToken)
     {
-        var calculator = new ScoreCalculator(_db);
-        await calculator.CalculateScore(request.Date, request.UserId, cancellationToken);
-        return Result.Success();
+        try
+        {
+            var calculator = new ScoreCalculator(_db);
+            await calculator.CalculateScore(request.Date, request.UserId, cancellationToken);
+            return Result.Success();
+        }
+        catch (DbUpdateException ex)
+        {
+            // The cached score is not authoritative (GET endpoints recompute), so never fail the caller
+            _logger.LogWarning(ex, "Failed to persist score for user {UserId} on {Date}", request.UserId, request.Date);
+            return Result.Failure("Failed to persist score", ErrorCodes.InternalError);
+        }
     }
 }
 

@@ -24,10 +24,10 @@ public class GetTodayCheckInsHandler : IRequestHandler<GetTodayCheckInsQuery, Re
         // Get authenticated user ID
         var userId = _httpContextAccessor.HttpContext?.User.GetUserId();
         if (userId == null)
-            return Result<List<CheckInDto>>.Failure("User not authenticated");
+            return Result<List<CheckInDto>>.Failure("User not authenticated", ErrorCodes.Unauthorized);
 
-        // Use client date if provided, otherwise fallback to UTC
-        var targetDate = request.Date ?? DateOnly.FromDateTime(DateTime.UtcNow);
+        // Use client date if provided, otherwise the user's "today" (User.Timezone)
+        var targetDate = request.Date ?? await _db.GetUserTodayAsync(userId.Value, cancellationToken);
 
         var checkIns = await _db.CheckIns
             .Include(c => c.Habit)
@@ -64,7 +64,7 @@ public static class GetTodayCheckInsEndpoint
             
             return result.IsSuccess 
                 ? Results.Ok(result.Value)
-                : Results.BadRequest(new { error = result.Error });
+                : result.ToErrorResult();
         })
         .WithName("GetTodayCheckIns")
         .WithOpenApi()

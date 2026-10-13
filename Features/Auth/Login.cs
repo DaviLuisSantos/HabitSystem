@@ -35,23 +35,20 @@ public static class Login
                 return Result<Response>.Failure("Password is required");
 
             // Find user by email
+            var email = request.Email.Trim().ToLowerInvariant();
             var user = await _context.Users
-                .FirstOrDefaultAsync(u => u.Email.ToLower() == request.Email.ToLower(), cancellationToken);
+                .FirstOrDefaultAsync(u => u.Email.ToLower() == email, cancellationToken);
 
             if (user == null)
-                return Result<Response>.Failure("Invalid email or password");
+                return Result<Response>.Failure("Invalid email or password", ErrorCodes.InvalidCredentials);
 
             // Verify password
             if (!_authService.VerifyPassword(request.Password, user.PasswordHash))
-                return Result<Response>.Failure("Invalid email or password");
+                return Result<Response>.Failure("Invalid email or password", ErrorCodes.InvalidCredentials);
 
-            // Generate new tokens
+            // Generate new tokens (one refresh token per device/session)
             var accessToken = _authService.GenerateAccessToken(user);
-            var refreshToken = _authService.GenerateRefreshToken();
-
-            // Update refresh token in database
-            user.RefreshToken = refreshToken;
-            user.RefreshTokenExpiryTime = _authService.GetRefreshTokenExpiryTime();
+            var refreshToken = _authService.IssueRefreshToken(_context, user.Id);
             await _context.SaveChangesAsync(cancellationToken);
 
             return Result<Response>.Success(new Response(
@@ -71,7 +68,7 @@ public static class Login
             var result = await mediator.Send(command);
             return result.IsSuccess
                 ? Results.Ok(result.Value)
-                : Results.BadRequest(new { error = result.Error });
+                : result.ToErrorResult();
         })
         .WithName("Login")
         .WithOpenApi()

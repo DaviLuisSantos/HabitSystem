@@ -227,6 +227,43 @@ namespace HabitSystem.Migrations
                     b.ToTable("Users");
                 });
 
+            modelBuilder.Entity("HabitSystem.Domain.UserRefreshToken", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime>("ExpiresAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("ReplacedByTokenHash")
+                        .HasMaxLength(64)
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime?>("RevokedAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("TokenHash")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("TEXT");
+
+                    b.Property<Guid>("UserId")
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("TokenHash")
+                        .IsUnique();
+
+                    b.HasIndex("UserId");
+
+                    b.ToTable("RefreshTokens", (string)null);
+                });
+
             modelBuilder.Entity("HabitSystem.Domain.CheckIn", b =>
                 {
                     b.HasOne("HabitSystem.Domain.Habit", "Habit")
@@ -268,6 +305,17 @@ namespace HabitSystem.Migrations
                     b.Navigation("User");
                 });
 
+            modelBuilder.Entity("HabitSystem.Domain.UserRefreshToken", b =>
+                {
+                    b.HasOne("HabitSystem.Domain.User", "User")
+                        .WithMany("RefreshTokens")
+                        .HasForeignKey("UserId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("User");
+                });
+
             modelBuilder.Entity("HabitSystem.Domain.Habit", b =>
                 {
                     b.Navigation("CheckIns");
@@ -280,6 +328,8 @@ namespace HabitSystem.Migrations
                     b.Navigation("DailyScores");
 
                     b.Navigation("Habits");
+
+                    b.Navigation("RefreshTokens");
                 });
 #pragma warning restore 612, 618
         }

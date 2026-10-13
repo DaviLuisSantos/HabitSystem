@@ -1,7 +1,11 @@
+using System.Net.Mail;
+using System.Security.Cryptography;
 using HabitSystem.Common;
 using HabitSystem.Domain;
 using HabitSystem.Infrastructure;
+using HabitSystem.Services;
 using MediatR;
+using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 
 namespace HabitSystem.Features.Auth;
@@ -19,50 +23,81 @@ public static class Register
     {
         private readonly AppDbContext _context;
         private readonly AuthService _authService;
+        private readonly IEmailService _email;
 
-        public Handler(AppDbContext context, AuthService authService)
+        public Handler(AppDbContext context, AuthService authService, IEmailService email)
         {
             _context = context;
             _authService = authService;
+            _email = email;
         }
 
         public async Task<Result<Response>> Handle(Command request, CancellationToken cancellationToken)
         {
             // Validate input
-            if (string.IsNullOrWhiteSpace(request.Email))
+            var name = request.Name?.Trim();
+            var email = request.Email?.Trim().ToLowerInvariant();
+
+            if (string.IsNullOrWhiteSpace(email))
                 return Result<Response>.Failure("Email is required");
+
+            if (email.Length > 255 || !IsValidEmail(email))
+                return Result<Response>.Failure("Invalid email format");
 
             if (string.IsNullOrWhiteSpace(request.Password))
                 return Result<Response>.Failure("Password is required");
 
-            if (request.Password.Length < 6)
-                return Result<Response>.Failure("Password must be at least 6 characters");
+            if (request.Password.Length < Constants.MinPasswordLength)
+                return Result<Response>.Failure($"Password must be at least {Constants.MinPasswordLength} characters");
 
-            if (string.IsNullOrWhiteSpace(request.Name))
+            if (string.IsNullOrWhiteSpace(name))
                 return Result<Response>.Failure("Name is required");
+
+            if (name.Length > 100)
+                return Result<Response>.Failure("Name must be at most 100 characters");
 
             // Check if email already exists
             var emailExists = await _context.Users
-                .AnyAsync(u => u.Email.ToLower() == request.Email.ToLower(), cancellationToken);
+                .AnyAsync(u => u.Email.ToLower() == email, cancellationToken);
 
             if (emailExists)
-                return Result<Response>.Failure("Email already registered");
+                return Result<Response>.Failure("Email already registered", ErrorCodes.EmailTaken);
+
+            // Unknown / invalid timezone ids fall back to the default
+            var timezone = request.Timezone?.Trim();
+            if (timezone == null || timezone.Length > 50 || !UserClock.IsValidTimeZone(timezone))
+                timezone = UserClock.DefaultTimezone;
+
+            var verificationToken = GenerateToken();
 
             // Create new user
             var user = new User
             {
                 Id = Guid.NewGuid(),
-                Name = request.Name,
-                Email = request.Email.ToLower(),
-                Timezone = request.Timezone ?? "America/Sao_Paulo",
+                Name = name,
+                Email = email,
+                Timezone = timezone,
                 PasswordHash = _authService.HashPassword(request.Password),
-                RefreshToken = _authService.GenerateRefreshToken(),
-                RefreshTokenExpiryTime = _authService.GetRefreshTokenExpiryTime(),
+                EmailVerificationToken = verificationToken,
+                EmailVerificationTokenExpiry = DateTime.UtcNow.AddHours(Constants.EmailVerificationTokenExpiryHours),
                 CreatedAt = DateTime.UtcNow
             };
 
             _context.Users.Add(user);
-            await _context.SaveChangesAsync(cancellationToken);
+            var refreshToken = _authService.IssueRefreshToken(_context, user.Id);
+
+            try
+            {
+                await _context.SaveChangesAsync(cancellationToken);
+            }
+            catch (DbUpdateException ex) when (ex.InnerException is SqliteException { SqliteErrorCode: 19 })
+            {
+                // Concurrent registration with the same e-mail hit the unique index
+                return Result<Response>.Failure("Email already registered", ErrorCodes.EmailTaken);
+            }
+
+            // Verification is optional and must never block registration (service is fail-safe)
+            await _email.SendEmailVerificationAsync(user.Email, user.Name, verificationToken, cancellationToken);
 
             // Generate tokens
             var accessToken = _authService.GenerateAccessToken(user);
@@ -72,8 +107,29 @@ public static class Register
                 user.Email,
                 user.Name,
                 accessToken,
-                user.RefreshToken!
+                refreshToken
             ));
+        }
+
+        private static bool IsValidEmail(string email)
+        {
+            try
+            {
+                var address = new MailAddress(email);
+                return address.Address == email && address.Host.Contains('.', StringComparison.Ordinal);
+            }
+            catch (FormatException)
+            {
+                return false;
+            }
+        }
+
+        private static string GenerateToken()
+        {
+            var bytes = new byte[32];
+            RandomNumberGenerator.Fill(bytes);
+            return Convert.ToBase64String(bytes)
+                .Replace("+", "-").Replace("/", "_").Replace("=", "");
         }
     }
 
@@ -84,7 +140,7 @@ public static class Register
             var result = await mediator.Send(command);
             return result.IsSuccess
                 ? Results.Ok(result.Value)
-                : Results.BadRequest(new { error = result.Error });
+                : result.ToErrorResult();
         })
         .WithName("Register")
         .WithOpenApi()

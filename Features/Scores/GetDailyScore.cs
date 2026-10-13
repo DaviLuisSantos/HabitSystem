@@ -33,12 +33,14 @@ public class GetDailyScoreHandler : IRequestHandler<GetDailyScoreQuery, Result<D
         // Get authenticated user ID
         var userId = _httpContextAccessor.HttpContext?.User.GetUserId();
         if (userId == null)
-            return Result<DailyScoreDto>.Failure("User not authenticated");
+            return Result<DailyScoreDto>.Failure("User not authenticated", ErrorCodes.Unauthorized);
 
-        // Always recalculate to ensure we have the latest data
-        // (new habits, updated check-ins, etc.)
+        // Fallback to the user's "today" (User.Timezone) when no date is given
+        var date = request.Date ?? await _db.GetUserTodayAsync(userId.Value, cancellationToken);
+
+        // Computed on read (no DB writes) so the result always reflects the latest habits/check-ins
         var calculator = new ScoreCalculator(_db);
-        var calculatedScore = await calculator.CalculateScore(request.Date, userId.Value, cancellationToken);
+        var calculatedScore = await calculator.ComputeScore(date, userId.Value, cancellationToken);
         
         var score = new DailyScoreDto(
             calculatedScore.Date,
@@ -53,7 +55,7 @@ public class GetDailyScoreHandler : IRequestHandler<GetDailyScoreQuery, Result<D
 }
 
 // Query
-public record GetDailyScoreQuery(DateOnly Date) : IRequest<Result<DailyScoreDto>>;
+public record GetDailyScoreQuery(DateOnly? Date) : IRequest<Result<DailyScoreDto>>;
 
 // Endpoint
 public static class GetDailyScoreEndpoint
@@ -64,13 +66,12 @@ public static class GetDailyScoreEndpoint
             [FromQuery] DateOnly? date,
             [FromServices] IMediator mediator) =>
         {
-            // Use client date if provided, otherwise fallback to UTC
-            var targetDate = date ?? DateOnly.FromDateTime(DateTime.UtcNow);
-            var result = await mediator.Send(new GetDailyScoreQuery(targetDate));
+            // Use client date if provided, otherwise the handler falls back to the user's today
+            var result = await mediator.Send(new GetDailyScoreQuery(date));
             
             return result.IsSuccess 
                 ? Results.Ok(result.Value)
-                : Results.BadRequest(new { error = result.Error });
+                : result.ToErrorResult();
         })
         .WithName("GetTodayScore")
         .WithOpenApi()
@@ -84,7 +85,7 @@ public static class GetDailyScoreEndpoint
             
             return result.IsSuccess 
                 ? Results.Ok(result.Value)
-                : Results.BadRequest(new { error = result.Error });
+                : result.ToErrorResult();
         })
         .WithName("GetDailyScore")
         .WithOpenApi()

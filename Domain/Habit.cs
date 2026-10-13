@@ -46,8 +46,9 @@ public class Habit
 
     /// <summary>
     /// Days of the week when habit should be done (if FrequencyType = SpecificDays)
-    /// Values: 1=Monday, 2=Tuesday, ..., 7=Sunday
+    /// Values follow JavaScript getDay(): 0=Sunday, 1=Monday, ..., 6=Saturday
     /// Example: [1, 3, 5] = Monday, Wednesday, Friday
+    /// (7 is accepted on input as Sunday and normalized to 0)
     /// </summary>
     public int[]? FrequencyDays { get; set; }
 

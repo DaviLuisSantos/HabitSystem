@@ -33,18 +33,26 @@ public class UpdateCheckInHandler : IRequestHandler<UpdateCheckInCommand, Result
         // Get authenticated user ID
         var userId = _httpContextAccessor.HttpContext?.User.GetUserId();
         if (userId == null)
-            return Result<CheckInDto>.Failure("User not authenticated");
+            return Result<CheckInDto>.Failure("User not authenticated", ErrorCodes.Unauthorized);
+
+        // Input validation
+        if (!Enum.IsDefined(request.Request.Status))
+            return Result<CheckInDto>.Failure("Invalid check-in status");
+
+        var note = string.IsNullOrWhiteSpace(request.Request.Note) ? null : request.Request.Note.Trim();
+        if (note != null && note.Length > Constants.MaxNoteLength)
+            return Result<CheckInDto>.Failure($"Note must be at most {Constants.MaxNoteLength} characters");
 
         var checkIn = await _db.CheckIns
             .Include(c => c.Habit)
             .FirstOrDefaultAsync(c => c.Id == request.Id && c.UserId == userId.Value, cancellationToken);
 
         if (checkIn == null)
-            return Result<CheckInDto>.Failure("Check-in not found");
+            return Result<CheckInDto>.Failure("Check-in not found", ErrorCodes.NotFound);
 
         // Update check-in
         checkIn.Status = request.Request.Status;
-        checkIn.Note = request.Request.Note;
+        checkIn.Note = note;
 
         await _db.SaveChangesAsync(cancellationToken);
 
@@ -82,7 +90,7 @@ public static class UpdateCheckInEndpoint
             
             return result.IsSuccess 
                 ? Results.Ok(result.Value)
-                : Results.BadRequest(new { error = result.Error });
+                : result.ToErrorResult();
         })
         .WithName("UpdateCheckIn")
         .WithOpenApi()

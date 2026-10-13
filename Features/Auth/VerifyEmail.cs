@@ -2,6 +2,7 @@ using HabitSystem.Common;
 using HabitSystem.Infrastructure;
 using HabitSystem.Services;
 using MediatR;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.EntityFrameworkCore;
 using System.Security.Cryptography;
 
@@ -9,8 +10,12 @@ namespace HabitSystem.Features.Auth;
 
 public static class VerifyEmail
 {
-    public record VerifyCommand(string Token) : IRequest<Result>;
-    public record ResendCommand(string Email) : IRequest<Result>;
+    public record VerifyCommand(string? Token) : IRequest<Result>;
+
+    /// <summary>
+    /// Resends the verification e-mail to the authenticated user (id taken from the JWT claims)
+    /// </summary>
+    public record ResendCommand(Guid UserId) : IRequest<Result<bool>>;
 
     // ── Verify handler ───────────────────────────────────────────────────────
 
@@ -22,13 +27,17 @@ public static class VerifyEmail
 
         public async Task<Result> Handle(VerifyCommand request, CancellationToken ct)
         {
+            if (string.IsNullOrWhiteSpace(request.Token))
+                return Result.Failure("Invalid or expired verification token", ErrorCodes.InvalidToken);
+
             var user = await _db.Users.FirstOrDefaultAsync(u =>
                 u.EmailVerificationToken == request.Token &&
                 u.EmailVerificationTokenExpiry > DateTime.UtcNow, ct);
 
             if (user == null)
-                return Result.Failure("Invalid or expired verification token");
+                return Result.Failure("Invalid or expired verification token", ErrorCodes.InvalidToken);
 
+            // Single-use: token is cleared once consumed
             user.IsEmailVerified = true;
             user.EmailVerificationToken = null;
             user.EmailVerificationTokenExpiry = null;
@@ -40,7 +49,10 @@ public static class VerifyEmail
 
     // ── Resend handler ───────────────────────────────────────────────────────
 
-    public class ResendHandler : IRequestHandler<ResendCommand, Result>
+    /// <summary>
+    /// Returns true when an e-mail was sent, false when the user was already verified (no-op)
+    /// </summary>
+    public class ResendHandler : IRequestHandler<ResendCommand, Result<bool>>
     {
         private readonly AppDbContext _db;
         private readonly IEmailService _email;
@@ -51,13 +63,14 @@ public static class VerifyEmail
             _email = email;
         }
 
-        public async Task<Result> Handle(ResendCommand request, CancellationToken ct)
+        public async Task<Result<bool>> Handle(ResendCommand request, CancellationToken ct)
         {
-            var user = await _db.Users
-                .FirstOrDefaultAsync(u => u.Email == request.Email.ToLower(), ct);
+            var user = await _db.Users.FindAsync(new object[] { request.UserId }, ct);
+            if (user == null)
+                return Result<bool>.Failure("User not found", ErrorCodes.Unauthorized);
 
-            if (user == null || user.IsEmailVerified)
-                return Result.Success(); // Don't reveal info
+            if (user.IsEmailVerified)
+                return Result<bool>.Success(false);
 
             var token = GenerateToken();
             user.EmailVerificationToken = token;
@@ -65,9 +78,10 @@ public static class VerifyEmail
                 .AddHours(Constants.EmailVerificationTokenExpiryHours);
 
             await _db.SaveChangesAsync(ct);
+            // Fail-safe: e-mail errors are logged by the service and never surface here
             await _email.SendEmailVerificationAsync(user.Email, user.Name, token, ct);
 
-            return Result.Success();
+            return Result<bool>.Success(true);
         }
     }
 
@@ -88,19 +102,31 @@ public static class VerifyEmail
             var result = await mediator.Send(command);
             return result.IsSuccess
                 ? Results.Ok(new { message = "Email verified successfully" })
-                : Results.BadRequest(new { error = result.Error });
+                : result.ToErrorResult();
         })
         .WithName("VerifyEmail")
         .WithOpenApi()
-        .AllowAnonymous();
+        .AllowAnonymous()
+        .RequireRateLimiting("auth");
 
-        app.MapPost("/api/auth/resend-verification", async (ResendCommand command, IMediator mediator) =>
+        // Body is ignored (may be empty); the user comes from the access token
+        app.MapPost("/api/auth/resend-verification", [Authorize] async (HttpContext httpContext, IMediator mediator) =>
         {
-            await mediator.Send(command);
-            return Results.Ok(new { message = "If this email is registered and unverified, a new link was sent." });
+            var userId = httpContext.User.GetUserId();
+            if (userId == null)
+                return ResultHttpExtensions.ToErrorResult("User not authenticated", ErrorCodes.Unauthorized);
+
+            var result = await mediator.Send(new ResendCommand(userId.Value));
+            if (!result.IsSuccess)
+                return result.ToErrorResult();
+
+            return result.Value
+                ? Results.Ok(new { message = "Verification email sent." })
+                : Results.Ok(new { message = "Email already verified." });
         })
         .WithName("ResendVerification")
         .WithOpenApi()
-        .AllowAnonymous();
+        .RequireAuthorization()
+        .RequireRateLimiting("auth");
     }
 }

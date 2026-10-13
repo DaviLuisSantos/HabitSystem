@@ -28,3 +28,7 @@ README.md
 !.git/config
 !.git/packed-refs
 !.git/refs/heads/**
+**/*.sqlite
+**/*.sqlite-shm
+**/*.sqlite-wal
+**/*.db

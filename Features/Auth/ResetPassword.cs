@@ -7,7 +7,7 @@ namespace HabitSystem.Features.Auth;
 
 public static class ResetPassword
 {
-    public record Command(string Token, string NewPassword) : IRequest<Result>;
+    public record Command(string? Token, string? NewPassword) : IRequest<Result>;
 
     public class Handler : IRequestHandler<Command, Result>
     {
@@ -22,8 +22,11 @@ public static class ResetPassword
 
         public async Task<Result> Handle(Command request, CancellationToken ct)
         {
-            if (string.IsNullOrWhiteSpace(request.NewPassword) || request.NewPassword.Length < 6)
-                return Result.Failure("Password must be at least 6 characters");
+            if (string.IsNullOrWhiteSpace(request.NewPassword) || request.NewPassword.Length < Constants.MinPasswordLength)
+                return Result.Failure($"Password must be at least {Constants.MinPasswordLength} characters");
+
+            if (string.IsNullOrWhiteSpace(request.Token))
+                return Result.Failure("Invalid or expired reset token", ErrorCodes.InvalidToken);
 
             var user = await _db.Users
                 .FirstOrDefaultAsync(u =>
@@ -31,16 +34,15 @@ public static class ResetPassword
                     u.PasswordResetTokenExpiry > DateTime.UtcNow, ct);
 
             if (user == null)
-                return Result.Failure("Invalid or expired reset token");
+                return Result.Failure("Invalid or expired reset token", ErrorCodes.InvalidToken);
 
             user.PasswordHash = _auth.HashPassword(request.NewPassword);
             user.PasswordResetToken = null;
             user.PasswordResetTokenExpiry = null;
-            // Invalidate all existing sessions
-            user.RefreshToken = null;
-            user.RefreshTokenExpiryTime = null;
 
+            // Token is single-use (cleared above); invalidate all existing sessions
             await _db.SaveChangesAsync(ct);
+            await AuthService.RevokeAllRefreshTokensAsync(_db, user.Id, ct);
             return Result.Success();
         }
     }
@@ -52,10 +54,11 @@ public static class ResetPassword
             var result = await mediator.Send(command);
             return result.IsSuccess
                 ? Results.Ok(new { message = "Password updated successfully" })
-                : Results.BadRequest(new { error = result.Error });
+                : result.ToErrorResult();
         })
         .WithName("ResetPassword")
         .WithOpenApi()
-        .AllowAnonymous();
+        .AllowAnonymous()
+        .RequireRateLimiting("auth");
     }
 }

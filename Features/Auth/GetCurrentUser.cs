@@ -30,17 +30,17 @@ public static class GetCurrentUser
         {
             var httpContext = _httpContextAccessor.HttpContext;
             if (httpContext == null)
-                return Result<Response>.Failure("No HTTP context available");
+                return Result<Response>.Failure("No HTTP context available", ErrorCodes.Unauthorized);
 
             // Get user ID from claims
             var userIdClaim = httpContext.User.Claims.FirstOrDefault(c => c.Type == ClaimTypes.NameIdentifier);
             if (userIdClaim == null || !Guid.TryParse(userIdClaim.Value, out var userId))
-                return Result<Response>.Failure("User not authenticated");
+                return Result<Response>.Failure("User not authenticated", ErrorCodes.Unauthorized);
 
             // Find user
             var user = await _context.Users.FindAsync(new object[] { userId }, cancellationToken);
             if (user == null)
-                return Result<Response>.Failure("User not found");
+                return Result<Response>.Failure("User not found", ErrorCodes.Unauthorized);
 
             return Result<Response>.Success(new Response(
                 user.Id,
@@ -61,7 +61,7 @@ public static class GetCurrentUser
             var result = await mediator.Send(new Query());
             return result.IsSuccess
                 ? Results.Ok(result.Value)
-                : Results.BadRequest(new { error = result.Error });
+                : result.ToErrorResult();
         })
         .WithName("GetCurrentUser")
         .WithOpenApi()

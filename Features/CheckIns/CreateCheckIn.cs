@@ -5,6 +5,7 @@ using HabitSystem.Infrastructure;
 using MediatR;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 
 namespace HabitSystem.Features.CheckIns;
@@ -46,24 +47,40 @@ public class CreateCheckInHandler : IRequestHandler<CreateCheckInCommand, Result
         // Get authenticated user ID
         var userId = _httpContextAccessor.HttpContext?.User.GetUserId();
         if (userId == null)
-            return Result<CheckInDto>.Failure("User not authenticated");
+            return Result<CheckInDto>.Failure("User not authenticated", ErrorCodes.Unauthorized);
+
+        // Input validation
+        if (!Enum.IsDefined(request.Request.Status))
+            return Result<CheckInDto>.Failure("Invalid check-in status");
+
+        var note = string.IsNullOrWhiteSpace(request.Request.Note) ? null : request.Request.Note.Trim();
+        if (note != null && note.Length > Constants.MaxNoteLength)
+            return Result<CheckInDto>.Failure($"Note must be at most {Constants.MaxNoteLength} characters");
+
+        // Date must be within [today - 365, today] in the user's timezone
+        var today = await _db.GetUserTodayAsync(userId.Value, cancellationToken);
+        if (request.Request.Date > today)
+            return Result<CheckInDto>.Failure("Check-in date cannot be in the future");
+
+        if (request.Request.Date < today.AddDays(-Constants.MaxCheckInAgeDays))
+            return Result<CheckInDto>.Failure($"Check-in date cannot be older than {Constants.MaxCheckInAgeDays} days");
 
         // Validate habit exists and is active
         var habit = await _db.Habits
             .FirstOrDefaultAsync(h => h.Id == request.Request.HabitId && h.UserId == userId.Value, cancellationToken);
 
         if (habit == null)
-            return Result<CheckInDto>.Failure("Habit not found");
+            return Result<CheckInDto>.Failure("Habit not found", ErrorCodes.NotFound);
 
         if (!habit.IsActive)
-            return Result<CheckInDto>.Failure("Cannot check-in to archived habit");
+            return Result<CheckInDto>.Failure("Cannot check-in to archived habit", ErrorCodes.HabitArchived);
 
         // Check for duplicate check-in (unique constraint: habit_id + date)
         var existingCheckIn = await _db.CheckIns
             .AnyAsync(c => c.HabitId == request.Request.HabitId && c.Date == request.Request.Date, cancellationToken);
 
         if (existingCheckIn)
-            return Result<CheckInDto>.Failure("Check-in already exists for this habit on this date");
+            return Result<CheckInDto>.Failure("Check-in already exists for this habit on this date", ErrorCodes.CheckInExists);
 
         // Create check-in
         var checkIn = new CheckIn
@@ -73,12 +90,21 @@ public class CreateCheckInHandler : IRequestHandler<CreateCheckInCommand, Result
             UserId = userId.Value,
             Date = request.Request.Date,
             Status = request.Request.Status,
-            Note = request.Request.Note,
+            Note = note,
             CreatedAt = DateTime.UtcNow
         };
 
         _db.CheckIns.Add(checkIn);
-        await _db.SaveChangesAsync(cancellationToken);
+        try
+        {
+            await _db.SaveChangesAsync(cancellationToken);
+        }
+        catch (DbUpdateException ex) when (ex.InnerException is SqliteException { SqliteErrorCode: 19 })
+        {
+            // Concurrent request inserted the same (HabitId, Date) between the check above and the insert
+            _db.Entry(checkIn).State = EntityState.Detached;
+            return Result<CheckInDto>.Failure("Check-in already exists for this habit on this date", ErrorCodes.CheckInExists);
+        }
 
         // Trigger score recalculation for this date
         await _mediator.Send(new Scores.RecalculateScoreCommand(request.Request.Date, userId.Value), cancellationToken);
@@ -113,7 +139,7 @@ public static class CreateCheckInEndpoint
             
             return result.IsSuccess 
                 ? Results.Created($"/api/checkins/{result.Value!.Id}", result.Value)
-                : Results.BadRequest(new { error = result.Error });
+                : result.ToErrorResult();
         })
         .WithName("CreateCheckIn")
         .WithOpenApi()

@@ -12,7 +12,7 @@ public enum FrequencyType
 
     /// <summary>
     /// Habit should be done on specific days of the week
-    /// (stored in FrequencyDays array: 1=Monday, 7=Sunday)
+    /// (stored in FrequencyDays array: 0=Sunday ... 6=Saturday, JS getDay() convention)
     /// </summary>
     SpecificDays = 1,
 

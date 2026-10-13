@@ -40,7 +40,7 @@ public class GetHabitsHandler : IRequestHandler<GetHabitsQuery, Result<List<Habi
         // Get authenticated user ID
         var userId = _httpContextAccessor.HttpContext?.User.GetUserId();
         if (userId == null)
-            return Result<List<HabitDto>>.Failure("User not authenticated");
+            return Result<List<HabitDto>>.Failure("User not authenticated", ErrorCodes.Unauthorized);
 
         var query = _db.Habits
             .Where(h => h.UserId == userId.Value);
@@ -86,7 +86,7 @@ public static class GetHabitsEndpoint
             
             return result.IsSuccess 
                 ? Results.Ok(result.Value)
-                : Results.BadRequest(new { error = result.Error });
+                : result.ToErrorResult();
         })
         .WithName("GetHabits")
         .WithOpenApi()

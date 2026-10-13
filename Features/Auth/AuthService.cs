@@ -3,6 +3,8 @@ using System.Security.Claims;
 using System.Security.Cryptography;
 using System.Text;
 using HabitSystem.Domain;
+using HabitSystem.Infrastructure;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
 
 namespace HabitSystem.Features.Auth;
@@ -87,6 +89,44 @@ public class AuthService
         var jwtSettings = _configuration.GetSection("JwtSettings");
         var expirationDays = int.Parse(jwtSettings["RefreshTokenExpirationDays"] ?? "7");
         return DateTime.UtcNow.AddDays(expirationDays);
+    }
+
+    /// <summary>
+    /// SHA-256 (hex) of a raw refresh token — only the hash is persisted
+    /// </summary>
+    public static string HashToken(string token)
+    {
+        var bytes = SHA256.HashData(Encoding.UTF8.GetBytes(token));
+        return Convert.ToHexString(bytes);
+    }
+
+    /// <summary>
+    /// Creates a new refresh token row for a user/device and adds it to the context
+    /// (caller saves). Returns the raw token to send to the client.
+    /// </summary>
+    public string IssueRefreshToken(AppDbContext db, Guid userId)
+    {
+        var rawToken = GenerateRefreshToken();
+        db.RefreshTokens.Add(new UserRefreshToken
+        {
+            Id = Guid.NewGuid(),
+            UserId = userId,
+            TokenHash = HashToken(rawToken),
+            ExpiresAt = GetRefreshTokenExpiryTime(),
+            CreatedAt = DateTime.UtcNow
+        });
+        return rawToken;
+    }
+
+    /// <summary>
+    /// Revokes every active refresh token of a user (all devices)
+    /// </summary>
+    public static Task<int> RevokeAllRefreshTokensAsync(AppDbContext db, Guid userId, CancellationToken ct = default)
+    {
+        var now = DateTime.UtcNow;
+        return db.RefreshTokens
+            .Where(t => t.UserId == userId && t.RevokedAt == null)
+            .ExecuteUpdateAsync(s => s.SetProperty(t => t.RevokedAt, now), ct);
     }
 
     /// <summary>

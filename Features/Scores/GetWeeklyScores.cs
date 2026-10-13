@@ -24,33 +24,29 @@ public class GetWeeklyScoresHandler : IRequestHandler<GetWeeklyScoresQuery, Resu
         // Get authenticated user ID
         var userId = _httpContextAccessor.HttpContext?.User.GetUserId();
         if (userId == null)
-            return Result<List<DailyScoreDto>>.Failure("User not authenticated");
+            return Result<List<DailyScoreDto>>.Failure("User not authenticated", ErrorCodes.Unauthorized);
+
+        // User's "today" (User.Timezone) is the fallback for both dates
+        var userToday = await _db.GetUserTodayAsync(userId.Value, cancellationToken);
+        var referenceDate = request.Date ?? userToday;
 
         // Get Monday of the week containing the given date
-        var startOfWeek = request.Date.AddDays(-(int)request.Date.DayOfWeek + (request.Date.DayOfWeek == DayOfWeek.Sunday ? -6 : 1));
+        var startOfWeek = referenceDate.AddDays(-(int)referenceDate.DayOfWeek + (referenceDate.DayOfWeek == DayOfWeek.Sunday ? -6 : 1));
         var endOfWeek = startOfWeek.AddDays(6);
 
-        // Always recalculate scores for accurate data
-        var calculator = new ScoreCalculator(_db);
+        // Only calculate for days up to client's today
+        var clientToday = request.ClientToday ?? userToday;
+        var lastDate = endOfWeek < clientToday ? endOfWeek : clientToday;
+
+        // Computed on read (no DB writes)
         var scores = new List<DailyScoreDto>();
-        
-        // Use client's "today" to determine which days to calculate
-        var clientToday = request.ClientToday ?? DateOnly.FromDateTime(DateTime.UtcNow);
-        
-        for (var date = startOfWeek; date <= endOfWeek; date = date.AddDays(1))
+        if (lastDate >= startOfWeek)
         {
-            // Only calculate for days up to client's today
-            if (date <= clientToday)
-            {
-                var calculatedScore = await calculator.CalculateScore(date, userId.Value, cancellationToken);
-                scores.Add(new DailyScoreDto(
-                    calculatedScore.Date,
-                    calculatedScore.TotalPossible,
-                    calculatedScore.TotalEarned,
-                    calculatedScore.Percentage,
-                    calculatedScore.CalculatedAt
-                ));
-            }
+            var calculator = new ScoreCalculator(_db);
+            var calculated = await calculator.ComputeScores(startOfWeek, lastDate, userId.Value, cancellationToken);
+            scores = calculated
+                .Select(s => new DailyScoreDto(s.Date, s.TotalPossible, s.TotalEarned, s.Percentage, s.CalculatedAt))
+                .ToList();
         }
 
         return Result<List<DailyScoreDto>>.Success(scores.OrderBy(s => s.Date).ToList());
@@ -58,7 +54,7 @@ public class GetWeeklyScoresHandler : IRequestHandler<GetWeeklyScoresQuery, Resu
 }
 
 // Query
-public record GetWeeklyScoresQuery(DateOnly Date, DateOnly? ClientToday = null) : IRequest<Result<List<DailyScoreDto>>>;
+public record GetWeeklyScoresQuery(DateOnly? Date, DateOnly? ClientToday = null) : IRequest<Result<List<DailyScoreDto>>>;
 
 // Endpoint
 public static class GetWeeklyScoresEndpoint
@@ -70,12 +66,11 @@ public static class GetWeeklyScoresEndpoint
             [FromQuery] DateOnly? today,
             [FromServices] IMediator mediator) =>
         {
-            var targetDate = date ?? DateOnly.FromDateTime(DateTime.UtcNow);
-            var result = await mediator.Send(new GetWeeklyScoresQuery(targetDate, today));
+            var result = await mediator.Send(new GetWeeklyScoresQuery(date, today));
             
             return result.IsSuccess 
                 ? Results.Ok(result.Value)
-                : Results.BadRequest(new { error = result.Error });
+                : result.ToErrorResult();
         })
         .WithName("GetWeeklyScores")
         .WithOpenApi()

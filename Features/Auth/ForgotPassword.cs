@@ -9,7 +9,7 @@ namespace HabitSystem.Features.Auth;
 
 public static class ForgotPassword
 {
-    public record Command(string Email) : IRequest<Result>;
+    public record Command(string? Email) : IRequest<Result>;
 
     public class Handler : IRequestHandler<Command, Result>
     {
@@ -25,8 +25,12 @@ public static class ForgotPassword
         public async Task<Result> Handle(Command request, CancellationToken ct)
         {
             // Always return success — don't reveal whether email exists
+            if (string.IsNullOrWhiteSpace(request.Email))
+                return Result.Success();
+
+            var email = request.Email.Trim().ToLowerInvariant();
             var user = await _db.Users
-                .FirstOrDefaultAsync(u => u.Email == request.Email.ToLower(), ct);
+                .FirstOrDefaultAsync(u => u.Email == email, ct);
 
             if (user != null)
             {
@@ -36,6 +40,7 @@ public static class ForgotPassword
                     .AddHours(Constants.PasswordResetTokenExpiryHours);
 
                 await _db.SaveChangesAsync(ct);
+                // Fail-safe: e-mail errors are logged by the service and never surface here
                 await _email.SendPasswordResetAsync(user.Email, user.Name, token, ct);
             }
 

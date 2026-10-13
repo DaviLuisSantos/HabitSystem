@@ -10,7 +10,7 @@ namespace HabitSystem.Features.Account;
 
 public static class DeleteAccount
 {
-    public record Command(string Password) : IRequest<Result>;
+    public record Command(string? Password) : IRequest<Result>;
 
     public class Handler : IRequestHandler<Command, Result>
     {
@@ -28,15 +28,15 @@ public static class DeleteAccount
         public async Task<Result> Handle(Command request, CancellationToken ct)
         {
             var userId = _http.HttpContext?.User.GetUserId();
-            if (userId == null) return Result.Failure("Not authenticated");
+            if (userId == null) return Result.Failure("Not authenticated", ErrorCodes.Unauthorized);
 
             var user = await _db.Users.FindAsync(new object[] { userId.Value }, ct);
-            if (user == null) return Result.Failure("User not found");
+            if (user == null) return Result.Failure("User not found", ErrorCodes.Unauthorized);
 
-            if (!_auth.VerifyPassword(request.Password, user.PasswordHash))
-                return Result.Failure("Password is incorrect");
+            if (string.IsNullOrEmpty(request.Password) || !_auth.VerifyPassword(request.Password, user.PasswordHash))
+                return Result.Failure("Password is incorrect", ErrorCodes.InvalidPassword);
 
-            // Cascade deletes handle related data (CheckIns, Habits, DailyScores)
+            // Cascade deletes handle related data (CheckIns, Habits, DailyScores, RefreshTokens)
             _db.Users.Remove(user);
             await _db.SaveChangesAsync(ct);
             return Result.Success();
@@ -50,7 +50,7 @@ public static class DeleteAccount
             var result = await mediator.Send(command);
             return result.IsSuccess
                 ? Results.Ok(new { message = "Account deleted" })
-                : Results.BadRequest(new { error = result.Error });
+                : result.ToErrorResult();
         })
         .WithName("DeleteAccount")
         .WithOpenApi()
