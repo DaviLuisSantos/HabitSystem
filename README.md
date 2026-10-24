@@ -1,3 +1,5 @@
+> **Projeto arquivado.** Esta é a primeira versão do Arco (.NET 9 + Next.js). Ela foi substituída por uma reescrita em .NET 10 + React 19, com níveis, ciclos, XP e servidor MCP. Mais detalhes em https://portifolio-daviluissantos-projects.vercel.app/projetos/arco/
+
 # Arco API (HabitSystem)
 
 .NET 9 minimal API + EF Core (SQLite) for the Arco habit tracker. Vertical slices with MediatR in `Features/`.
